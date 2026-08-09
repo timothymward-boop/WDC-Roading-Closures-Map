@@ -1,0 +1,2422 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Road Network Status</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/proj4js/2.9.0/proj4.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@turf/turf@6/turf.min.js"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        #map { height: 100%; width: 100%; z-index: 10; }
+        .overlay-slide { transition: transform 0.3s ease-in-out; }
+        .hidden-slide { transform: translateY(-100%); }
+        .custom-popup-wrapper .leaflet-popup-content-wrapper { border-radius: 0.5rem; padding: 0; overflow: hidden; }
+        .custom-popup-wrapper .leaflet-popup-content { margin: 0; width: 300px !important; }
+        .leaflet-control-attribution { display: none !important; }
+        
+        /* Mobile overrides for Leaflet controls */
+        @media (max-width: 767px) {
+            .leaflet-control-container .leaflet-bottom {
+                bottom: 80px !important; /* Push up past the bottom nav */
+            }
+            .leaflet-touch .leaflet-bar a {
+                width: 44px;
+                height: 44px;
+                line-height: 44px;
+            }
+        }
+    </style>
+</head>
+<body class="h-dvh w-screen overflow-hidden flex flex-col bg-slate-50 text-slate-900 font-sans">
+
+    <!-- Header -->
+    <header class="bg-white text-slate-900 p-4 justify-between items-center z-50 shadow-sm relative border-b border-slate-200 hidden md:flex">
+        <div class="flex items-center gap-3">
+            <h1 class="text-xl font-bold tracking-tight hidden sm:block text-slate-800">Whangarei District Unplanned Road Closures</h1>
+        </div>
+        <div class="flex items-center gap-2">
+            <div id="refreshControls" class="flex items-center bg-slate-100 rounded-md p-1 border border-slate-200 mr-2">
+                <div class="hidden lg:flex flex-col items-end text-[9px] text-slate-500 mr-2 px-1 leading-tight">
+                    <span id="lastUpdatedText">Last updated: Just now</span>
+                </div>
+                <button id="refreshBtn" aria-label="Refresh Map Data" class="p-1.5 rounded hover:bg-white hover:shadow-sm transition-all text-slate-600" title="Refresh Map Data">
+                    <i aria-hidden="true" data-lucide="refresh-cw" class="w-4 h-4"></i>
+                </button>
+                <div class="w-px h-4 bg-slate-300 mx-1"></div>
+                <button id="autoRefreshBtn" class="px-2 py-1 rounded text-[10px] font-bold transition-all text-slate-500 hover:bg-white hover:shadow-sm" title="Auto-refreshes every 5 minutes">
+                    AUTO OFF
+                </button>
+                <span id="refreshPeriod" class="text-[8px] text-slate-400 ml-1 hidden lg:inline">5m</span>
+            </div>
+            <!-- Mobile Navigation controls hidden on desktop -->
+            <button id="reportIssueBtn" class="items-center gap-2 bg-red-600 hover:bg-red-700 text-white px-3 py-2 sm:px-4 rounded-md transition-colors text-sm font-medium border border-red-700 shadow-sm hidden md:flex">
+                <i aria-hidden="true" data-lucide="alert-triangle" class="w-4 h-4"></i>
+                <span class="hidden sm:inline">Report Local Issue</span>
+                <span class="sm:hidden">Report</span>
+            </button>
+            <button id="toggleAnalytics" class="items-center gap-2 bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-2 sm:px-4 rounded-md transition-colors text-sm font-medium border border-slate-200 hidden md:flex">
+                <i aria-hidden="true" data-lucide="bar-chart-2" class="w-4 h-4"></i>
+                <span class="hidden sm:inline">Analytics</span>
+            </button>
+            
+            <!-- Handy Links Dropdown -->
+            <div class="relative group hidden md:block">
+                <button id="linksBtn" class="flex items-center gap-2 bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-2 sm:px-4 rounded-md transition-colors text-sm font-medium border border-slate-200">
+                    <i aria-hidden="true" data-lucide="external-link" class="w-4 h-4"></i>
+                    <span class="hidden sm:inline">Handy Links</span>
+                    <i aria-hidden="true" data-lucide="chevron-down" class="w-3 h-3 opacity-50"></i>
+                </button>
+                <div id="linksDropdown" class="absolute right-0 mt-2 w-64 bg-white rounded-lg shadow-xl border border-slate-200 py-2 z-[100] hidden">
+                    <div class="px-4 py-2 border-b border-slate-100 mb-1">
+                        <span class="text-[10px] font-bold uppercase tracking-wider text-slate-400">External Resources</span>
+                    </div>
+                    <a href="https://www.journeys.nzta.govt.nz/journey-planner" target="_blank" class="flex items-start gap-3 px-4 py-3 hover:bg-slate-50 transition-colors group/link">
+                        <div class="p-2 bg-blue-50 rounded-md group-hover/link:bg-blue-100 transition-colors">
+                            <i aria-hidden="true" data-lucide="map" class="w-4 h-4 text-blue-600"></i>
+                        </div>
+                        <div>
+                            <div class="text-xs font-bold text-slate-800">NZTA Journey Planner</div>
+                            <div class="text-[10px] text-slate-500 leading-tight mt-0.5">Plan your trip and see state highway conditions.</div>
+                        </div>
+                    </a>
+                    <a href="https://www.metservice.com/warnings/home#upper-north" target="_blank" class="flex items-start gap-3 px-4 py-3 hover:bg-slate-50 transition-colors group/link">
+                        <div class="p-2 bg-amber-50 rounded-md group-hover/link:bg-amber-100 transition-colors">
+                            <i aria-hidden="true" data-lucide="cloud-lightning" class="w-4 h-4 text-amber-600"></i>
+                        </div>
+                        <div>
+                            <div class="text-xs font-bold text-slate-800">MetService Warnings</div>
+                            <div class="text-[10px] text-slate-500 leading-tight mt-0.5">Check severe weather warnings for Northland.</div>
+                        </div>
+                    </a>
+                    <a href="https://www.nrc.govt.nz/environment/environmental-data/environmental-data-hub/?moduleId=5" target="_blank" rel="noopener noreferrer" class="flex items-start gap-3 px-4 py-3 hover:bg-slate-50 transition-colors group/link">
+                        <div class="p-2 bg-cyan-50 rounded-md group-hover/link:bg-cyan-100 transition-colors">
+                            <i aria-hidden="true" data-lucide="droplets" class="w-4 h-4 text-cyan-600"></i>
+                        </div>
+                        <div>
+                            <div class="text-xs font-bold text-slate-800">NRC Env Data Hub</div>
+                            <div class="text-[10px] text-slate-500 leading-tight mt-0.5">Check river levels and rainfall data.</div>
+                        </div>
+                    </a>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <!-- Report Disclaimer Modal -->
+    <div id="reportDisclaimerModal" role="dialog" aria-modal="true" aria-labelledby="disclaimerModalTitle" class="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-[200] hidden items-center justify-center p-4">
+        <div class="bg-white rounded-xl shadow-xl w-full max-w-lg max-h-[85vh] flex flex-col overflow-hidden transform transition-all">
+            <div class="flex items-center justify-between p-4 border-b border-slate-100 shrink-0">
+                <h2 id="disclaimerModalTitle" class="text-lg font-bold text-slate-800 flex items-center gap-2">
+                    <i aria-hidden="true" data-lucide="info" class="w-5 h-5 text-blue-600"></i>
+                    Reporting Requirements
+                </h2>
+                <button id="closeDisclaimerModal" class="text-slate-500 hover:text-slate-700 transition-colors">
+                    <span class="sr-only">Close Reporting Requirements</span>
+                    <i aria-hidden="true" data-lucide="x" class="w-5 h-5"></i>
+                </button>
+            </div>
+            <div class="p-6 space-y-4 overflow-y-auto flex-1">
+                <div class="flex items-center gap-3 text-red-700 bg-red-50 p-3 rounded-lg border border-red-100 shrink-0">
+                    <i aria-hidden="true" data-lucide="phone-call" class="w-6 h-6 shrink-0"></i>
+                    <span class="text-sm font-bold italic">If your life is at risk, call 111 right away.</span>
+                </div>
+
+                <div class="space-y-3 shrink-0">
+                    <p class="text-sm font-medium text-slate-700 leading-relaxed">
+                        Please only use this form to report issues that are <strong>impacting the function of the WDC Local Roading network</strong> (e.g. major slips, flooding, or fallen trees).
+                    </p>
+                    
+                    <div class="bg-amber-50 border border-amber-100 p-3 rounded-lg text-xs text-amber-800">
+                        <strong>Note:</strong> This is for Whangarei District Council local roads only. For State Highway or NZTA issues, please contact Waka Kotahi (NZTA) directly.
+                    </div>
+
+                    <p class="text-xs text-slate-600">
+                        For all other council-related issues, please use our 
+                        <a href="https://whc.t1cloud.com/apps/KnowledgeBase/ourCouncil/" target="_blank" class="text-blue-600 hover:underline font-medium inline-flex items-center gap-1">
+                            Knowledge Base / Request System
+                            <i aria-hidden="true" data-lucide="external-link" class="w-3 h-3"></i>
+                        </a>.
+                    </p>
+                </div>
+
+                <div class="pt-4 border-t border-slate-100 shrink-0">
+                    <p class="text-[10px] font-bold text-red-600 uppercase tracking-wider mb-1">Urgent requests</p>
+                    <p class="text-xs text-slate-700 leading-relaxed">
+                        Contact us on <strong>0800 932 463</strong> or <strong>09 430 4200</strong> (24 hours a day) if you have an urgent issue.
+                    </p>
+                </div>
+            </div>
+            
+            <div class="p-4 border-t border-slate-100 shrink-0">
+                <button id="proceedToReportBtn" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-lg transition-all shadow-md flex items-center justify-center gap-2">
+                    I Understand, Proceed to Report
+                    <i aria-hidden="true" data-lucide="chevron-right" class="w-4 h-4"></i>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Report Issue Modal -->
+    <div id="reportModal" role="dialog" aria-modal="true" aria-labelledby="reportModalTitle" class="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-[200] hidden items-center justify-center p-0 md:p-4">
+        <div class="bg-white md:rounded-xl shadow-xl w-full h-full md:h-auto md:max-w-lg md:max-h-[90vh] flex flex-col overflow-hidden transform transition-all">
+            <div class="flex items-center justify-between p-4 border-b border-slate-100 bg-white z-10">
+                <h2 id="reportModalTitle" class="text-lg font-bold text-slate-800 flex items-center gap-2">
+                    <i aria-hidden="true" data-lucide="alert-triangle" class="w-5 h-5 text-red-600"></i>
+                    Report Local Roading Issue
+                </h2>
+                <button id="closeReportModal" class="text-slate-500 hover:text-slate-700 p-2 min-w-[44px] min-h-[44px] flex items-center justify-center transition-colors">
+                    <span class="sr-only">Close Report Form</span>
+                    <i aria-hidden="true" data-lucide="x" class="w-5 h-5"></i>
+                </button>
+            </div>
+            <div class="flex-1 overflow-y-auto">
+                <div class="p-4 md:p-6 pb-24 md:pb-6">
+                    <form id="reportForm" class="space-y-4">
+                        <input type="hidden" id="reportSystemId" name="system_id">
+                        <input type="hidden" id="reportLat" name="lat">
+                        <input type="hidden" id="reportLng" name="lng">
+                    <div>
+                        <label for="reportLocation" class="block text-sm font-medium text-slate-700 mb-1">Location / Road Name <span class="text-red-500">*</span></label>
+                        <div class="space-y-2">
+                            <div class="relative">
+                                <input type="text" id="reportLocation" aria-describedby="error-location-digits error-location" aria-invalid="false" required class="w-full px-3 py-2 border border-slate-300 rounded-md text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors" placeholder="Start typing an address, or use map/GPS..." autocomplete="off">
+                                <div id="locationSuggestions" class="absolute z-50 w-full bg-white border border-slate-200 rounded-md shadow-lg mt-1 hidden max-h-60 overflow-y-auto"></div>
+                                <p id="error-location-digits" aria-live="polite" class="text-[10px] text-red-600 mt-1 hidden font-medium">Please include a house number, RAPID number, or displacement (e.g., "12 Road Name" or "Road 1.5km").</p>
+                                <p id="error-location" aria-live="polite" class="text-[10px] text-red-600 mt-1 hidden font-medium">Please provide a valid location.</p>
+                            </div>
+                            <div id="locationActionButtons" class="flex gap-2 mt-2">
+                                <button type="button" id="dropPinBtn" class="flex-1 bg-white hover:bg-slate-50 text-slate-800 border border-slate-300 shadow-sm px-3 py-3 rounded-md flex flex-col items-center justify-center gap-1 transition-colors text-sm font-medium" title="Drop a pin on the map">
+                                    <i aria-hidden="true" data-lucide="map-pin" class="w-5 h-5 text-blue-600"></i>
+                                    <span>Pick on Map</span>
+                                </button>
+                                <button type="button" id="useLocationBtn" class="flex-1 bg-blue-600 hover:bg-blue-700 text-white shadow-sm px-3 py-3 rounded-md border border-blue-700 flex flex-col items-center justify-center gap-1 transition-colors text-sm font-medium" title="Use my current location">
+                                    <i aria-hidden="true" data-lucide="crosshair" class="w-5 h-5"></i>
+                                    <span>Use GPS</span>
+                                </button>
+                            </div>
+                        </div>
+                        <div id="selectedCoords" class="text-xs text-slate-500 mt-1 hidden flex items-center gap-1"><i aria-hidden="true" data-lucide="crosshair" class="w-3 h-3"></i> <span id="coordsDisplay"></span></div>
+                        <div id="existingReportsWarning" class="mt-2 hidden"></div>
+                    </div>
+                    <div>
+                        <label for="reportType" class="block text-sm font-medium text-slate-700 mb-1">Issue Type <span class="text-red-500">*</span></label>
+                        <select id="reportType" aria-describedby="error-type" aria-invalid="false" required class="w-full px-3 py-2 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white transition-colors">
+                            <option value="">Select issue type...</option>
+                            <option value="update">Update on Existing Issue</option>
+                            <option value="slip">Slip / Landslide</option>
+                            <option value="flooding">Flooding</option>
+                            <option value="tree">Tree Down</option>
+                            <option value="other">Other</option>
+                        </select>
+                        <p id="error-type" aria-live="polite" class="text-[10px] text-red-600 mt-1 hidden font-medium">Please select an issue type.</p>
+                    </div>
+                    <div role="group" aria-labelledby="statusLabel" class="block">
+                        <label id="statusLabel" class="block text-sm font-medium text-slate-700 mb-2">Road Status <span class="text-red-500">*</span></label>
+                        <input type="hidden" id="reportStatus" name="status" required>
+                        <div id="statusButtonsContainer" role="radiogroup" aria-required="true" class="grid grid-cols-3 gap-2 p-1 rounded-lg transition-colors">
+                            <button type="button" role="radio" aria-checked="false" data-status="Closed" class="status-btn px-2 py-2 rounded-md border border-slate-200 text-[10px] font-bold uppercase tracking-wider transition-all flex flex-col items-center gap-1 hover:bg-red-50 hover:border-red-200 text-slate-500 focus-visible:ring-2 focus-visible:ring-blue-500 outline-none">
+                                <div class="w-2 h-2 rounded-full bg-red-500"></div>
+                                Closed
+                            </button>
+                            <button type="button" role="radio" aria-checked="false" data-status="Restricted" class="status-btn px-2 py-2 rounded-md border border-slate-200 text-[10px] font-bold uppercase tracking-wider transition-all flex flex-col items-center gap-1 hover:bg-amber-50 hover:border-amber-200 text-slate-500 focus-visible:ring-2 focus-visible:ring-blue-500 outline-none">
+                                <div class="w-2 h-2 rounded-full bg-amber-500"></div>
+                                Restricted
+                            </button>
+                            <button type="button" role="radio" aria-checked="false" data-status="Open" class="status-btn px-2 py-2 rounded-md border border-slate-200 text-[10px] font-bold uppercase tracking-wider transition-all flex flex-col items-center gap-1 hover:bg-emerald-50 hover:border-emerald-200 text-slate-500 focus-visible:ring-2 focus-visible:ring-blue-500 outline-none">
+                                <div class="w-2 h-2 rounded-full bg-emerald-500"></div>
+                                Open
+                            </button>
+                        </div>
+                        <p id="error-status" aria-live="polite" class="text-[10px] text-red-600 mt-1 hidden font-medium">Please select a road status.</p>
+                    </div>
+                    <div>
+                        <label for="reportDesc" class="block text-sm font-medium text-slate-700 mb-1">Description <span class="text-red-500">*</span></label>
+                        <textarea id="reportDesc" aria-describedby="error-desc" aria-invalid="false" required rows="3" class="w-full px-3 py-2 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none transition-colors" placeholder="Please provide details about the issue..."></textarea>
+                        <p id="error-desc" aria-live="polite" class="text-[10px] text-red-600 mt-1 hidden font-medium">Please provide a detailed description.</p>
+                    </div>
+                    <div>
+                        <label for="reportMedia" class="block text-sm font-medium text-slate-700 mb-1">Photo / Video (Optional)</label>
+                        <input type="file" id="reportMedia" accept="image/*,video/*" class="w-full px-3 py-2 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100">
+                    </div>
+                </form>
+                <div id="reportSuccess" role="alert" aria-live="assertive" class="hidden text-center py-6">
+                    <div class="w-12 h-12 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                        <i aria-hidden="true" data-lucide="check" class="w-6 h-6 text-green-600"></i>
+                    </div>
+                    <h3 class="text-lg font-bold text-slate-800 mb-2">Report Submitted</h3>
+                    <p class="text-slate-600 text-sm mb-6">Thank you for reporting this issue. Our team has been notified and will investigate.</p>
+                    <button id="closeSuccessBtn" class="bg-slate-100 hover:bg-slate-200 text-slate-800 font-medium py-2 px-6 min-h-[44px] w-full rounded-md transition-colors">
+                        Close
+                    </button>
+                </div>
+            </div>
+            </div>
+            
+            <div id="reportFormActions" class="p-4 bg-white border-t border-slate-100 sticky bottom-0 z-20 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)]">
+                <button type="button" id="triggerReportSubmitBtn" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-3 min-h-[44px] rounded-md transition-colors flex justify-center items-center gap-2 shadow-sm relative">
+                    <span id="reportSubmitText">Submit Report</span>
+                    <i aria-hidden="true" data-lucide="loader-2" id="reportSubmitSpinner" class="hidden w-5 h-5 animate-spin"></i>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Analytics Dashboard Overlay -->
+    <div id="analyticsDashboard" class="absolute top-0 md:top-16 left-0 w-full bg-white shadow-xl z-[150] md:z-40 overlay-slide hidden-slide border-b border-slate-200 h-full md:max-h-[calc(100vh-4rem)] md:h-auto overflow-y-auto">
+        <div class="p-4 md:p-6 max-w-7xl mx-auto pb-20 md:pb-6">
+            <div class="flex justify-between items-center mb-6 sticky top-0 bg-white py-2 z-10 border-b border-slate-100 md:border-0">
+                <h2 class="text-2xl font-bold text-slate-800">Network Analytics</h2>
+                <button id="closeAnalytics" aria-label="Close Analytics Dashboard" class="text-slate-500 hover:text-slate-800 p-2 min-w-[44px] min-h-[44px] flex items-center justify-center"><i aria-hidden="true" data-lucide="x" class="w-6 h-6"></i></button>
+            </div>
+            
+            <!-- Stats Grid -->
+            <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
+                <div class="bg-slate-50 p-4 rounded-lg border border-slate-200">
+                    <div class="text-sm text-slate-500 mb-1">Total Active Issues</div>
+                    <div id="statTotal" class="text-3xl font-bold text-slate-800">0</div>
+                </div>
+                <div class="bg-red-50 p-4 rounded-lg border border-red-100">
+                    <div class="text-sm text-red-600 mb-1">Roads Closed</div>
+                    <div id="statCritical" class="text-3xl font-bold text-red-700">0</div>
+                </div>
+                <div class="bg-amber-50 p-4 rounded-lg border border-amber-100">
+                    <div class="text-sm text-amber-600 mb-1">Partial Access</div>
+                    <div id="statWarning" class="text-3xl font-bold text-amber-700">0</div>
+                </div>
+                <div class="bg-blue-50 p-4 rounded-lg border border-blue-100">
+                    <div class="text-sm text-blue-600 mb-1">Avg Duration (Days)</div>
+                    <div id="statAvgDuration" class="text-3xl font-bold text-blue-700">0</div>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-8">
+                <!-- Common Causes -->
+                <div>
+                    <h3 class="text-lg font-semibold mb-4 flex items-center gap-2"><i aria-hidden="true" data-lucide="pie-chart" class="w-5 h-5 text-slate-500"></i> Common Causes</h3>
+                    <ul id="listCauses" class="space-y-2"></ul>
+                </div>
+                <!-- State of Play -->
+                <div>
+                    <h3 class="text-lg font-semibold mb-4 flex items-center gap-2"><i aria-hidden="true" data-lucide="activity" class="w-5 h-5 text-slate-500"></i> State of Play</h3>
+                    <div id="stateOfPlay" class="space-y-4"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Main Content -->
+    <div class="flex flex-1 overflow-hidden relative pb-16 md:pb-0">
+        
+        <!-- Mobile Bottom Navigation -->
+        <nav class="md:hidden fixed bottom-0 left-0 w-full h-16 bg-white border-t border-slate-200 z-[120] flex items-center justify-around px-2 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)]">
+            <button id="navToggleViewBtn" class="flex flex-col items-center justify-center w-16 h-full text-blue-600 transition-colors">
+                <i aria-hidden="true" data-lucide="list" id="navToggleIcon" class="w-6 h-6 mb-1"></i>
+                <span id="navToggleText" class="text-[10px] font-medium leading-none">List</span>
+            </button>
+            <button id="navRefreshBtnMobile" class="flex flex-col items-center justify-center w-16 h-full text-slate-500 hover:text-slate-900 transition-colors relative">
+                <i aria-hidden="true" data-lucide="refresh-cw" class="w-6 h-6 mb-1"></i>
+                <span class="text-[10px] font-medium leading-none">Refresh</span>
+            </button>
+            <button id="navReportBtnMobile" class="flex flex-col items-center justify-center text-white bg-red-600 rounded-full w-12 h-12 shadow-md -translate-y-4 hover:bg-red-700 transition-transform active:scale-95">
+                <i aria-hidden="true" data-lucide="alert-triangle" class="w-6 h-6"></i>
+            </button>
+            <button id="navAnalyticsBtn" class="flex flex-col items-center justify-center w-16 h-full text-slate-500 hover:text-slate-900 transition-colors">
+                <i aria-hidden="true" data-lucide="bar-chart-2" class="w-6 h-6 mb-1"></i>
+                <span class="text-[10px] font-medium leading-none">Data</span>
+            </button>
+            <button id="navLinksBtn" class="flex flex-col items-center justify-center w-16 h-full text-slate-500 hover:text-slate-900 relative transition-colors">
+                <i aria-hidden="true" data-lucide="external-link" class="w-6 h-6 mb-1"></i>
+                <span class="text-[10px] font-medium leading-none">Links</span>
+            </button>
+        </nav>
+
+        <!-- Sidebar -->
+        <aside id="sidebar" data-state="collapsed" class="w-full md:w-96 shrink-0 bg-white shadow-[4px_0_24px_rgba(0,0,0,0.05)] md:z-20 z-[100] flex flex-col fixed md:relative top-0 md:top-auto bottom-16 md:bottom-0 h-[calc(100%-4rem)] md:h-full transition-transform duration-300 ease-in-out translate-y-full md:translate-y-0">
+            <!-- Desktop Pull Handle -->
+            <button id="toggleSidebar" aria-label="Toggle Sidebar Navigation" aria-expanded="true" aria-controls="sidebar" class="absolute top-1/2 -right-6 w-6 h-16 bg-white border border-l-0 border-slate-200 rounded-r-md shadow-[4px_0_10px_rgba(0,0,0,0.05)] items-center justify-center z-30 transform -translate-y-1/2 text-slate-500 hover:text-slate-800 cursor-pointer hidden md:flex">
+                <i aria-hidden="true" data-lucide="chevron-left" id="sidebarIcon" class="w-4 h-4"></i>
+            </button>
+
+            <div class="p-4 border-b border-slate-100">
+                <div class="relative mb-3">
+                    <i aria-hidden="true" data-lucide="search" class="absolute left-3 top-2.5 w-4 h-4 text-slate-400"></i>
+                    <input type="text" id="searchInput" placeholder="Search roads or descriptions..." class="w-full pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 min-h-[44px]">
+                </div>
+                <div class="flex overflow-x-auto pb-2 -mx-2 px-2 snap-x scrollbar-hide gap-2 mb-2">
+                    <button class="filter-btn flex-1 min-w-[70px] min-h-[44px] py-1.5 px-2 text-xs font-medium rounded-md bg-slate-800 text-white snap-center" data-filter="all">All</button>
+                    <button class="filter-btn flex-1 min-w-[80px] min-h-[44px] py-1.5 px-2 text-xs font-medium rounded-md bg-slate-100 text-slate-600 hover:bg-red-50 hover:text-red-700 snap-center" data-filter="critical">Closed</button>
+                    <button class="filter-btn flex-1 min-w-[80px] min-h-[44px] py-1.5 px-2 text-xs font-medium rounded-md bg-slate-100 text-slate-600 hover:bg-amber-50 hover:text-amber-700 snap-center" data-filter="warning">Partial</button>
+                    <button class="filter-btn flex-1 min-w-[70px] min-h-[44px] py-1.5 px-2 text-xs font-medium rounded-md bg-slate-100 text-slate-600 hover:bg-emerald-50 hover:text-emerald-700 snap-center" data-filter="success">Open</button>
+                </div>
+                <div class="flex items-center justify-between text-xs text-slate-500">
+                    <span class="font-medium">Sort by:</span>
+                    <select id="sortSelect" class="bg-slate-50 border border-slate-200 rounded px-2 py-2 min-h-[44px] focus:outline-none focus:ring-1 focus:ring-blue-500 flex-1 ml-2">
+                        <option value="name_asc">Road Name (A-Z)</option>
+                        <option value="name_desc">Road Name (Z-A)</option>
+                        <option value="updated_desc">Recently Updated</option>
+                        <option value="updated_asc">Oldest Updated</option>
+                        <option value="severity">Severity</option>
+                    </select>
+                </div>
+            </div>
+            
+            <div id="featureList" class="flex-1 overflow-y-auto p-2 space-y-2 bg-slate-50">
+                <!-- List items injected here -->
+            </div>
+
+            <!-- External Sources Toggle -->
+            <div class="p-4 border-t border-slate-100 bg-white">
+                <h4 class="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-3">External Data Sources</h4>
+                <div class="flex items-center justify-between p-2.5 rounded-lg bg-slate-50 border border-slate-200 hover:border-blue-300 transition-colors group min-h-[44px]">
+                    <div class="flex items-center gap-2">
+                        <div class="p-1.5 bg-indigo-100 rounded text-indigo-700 group-hover:bg-indigo-200 transition-colors">
+                            <i aria-hidden="true" data-lucide="shield-alert" class="w-4 h-4"></i>
+                        </div>
+                        <div>
+                            <div class="text-xs font-bold text-slate-800">NZTA State Highways</div>
+                            <div class="text-[9px] text-slate-500 flex items-center gap-1">
+                                <span class="w-1 h-1 rounded-full bg-amber-500"></span>
+                                Uncontrolled Source
+                            </div>
+                        </div>
+                    </div>
+                    <label class="relative inline-flex items-center cursor-pointer">
+                        <input type="checkbox" id="toggleNzta" class="sr-only peer">
+                        <div class="w-9 h-5 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-indigo-600"></div>
+                    </label>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Map -->
+        <main class="flex-1 relative bg-slate-200 overflow-hidden">
+            <div id="map"></div>
+            
+            
+            <!-- Map Pin Mode Banner -->
+            <div id="pinModeBanner" class="absolute top-4 left-1/2 -translate-x-1/2 bg-blue-600 text-white px-6 py-3 rounded-full shadow-lg z-[60] hidden items-center gap-3 transition-all">
+                <i aria-hidden="true" data-lucide="map-pin" class="w-5 h-5 animate-bounce"></i>
+                <span class="font-medium text-sm sm:text-base whitespace-nowrap">Click map to drop pin</span>
+                <button id="cancelPinMode" aria-label="Cancel Map Pin Selection" class="ml-2 bg-white/20 hover:bg-white/30 rounded-full p-2 min-h-[44px] min-w-[44px] flex items-center justify-center transition-colors">
+                    <i aria-hidden="true" data-lucide="x" class="w-5 h-5"></i>
+                </button>
+            </div>
+
+            <!-- Legend -->
+            <div id="mapLegend" class="absolute top-4 left-4 md:top-auto md:bottom-6 md:left-auto md:right-6 bg-white/90 backdrop-blur-md p-2 md:p-3 rounded-xl shadow-lg z-[50] border border-slate-200 transition-all duration-300 w-auto min-w-[120px]">
+                <button id="toggleLegend" aria-expanded="false" aria-controls="legendContent" aria-label="Toggle Map Legend" class="flex items-center justify-between w-full md:hidden">
+                    <h4 class="text-[10px] font-bold uppercase tracking-wider text-slate-500">Map Legend</h4>
+                    <i aria-hidden="true" data-lucide="chevron-down" id="legendChevron" class="w-3 h-3 ml-2 transition-transform"></i>
+                </button>
+                <div id="legendContent" class="hidden md:block space-y-3 mt-2 md:mt-0 p-1">
+                    <h4 class="hidden md:block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-2">Map Legend</h4>
+                    
+                    <!-- WDC Local Roads -->
+                    <div class="mb-3">
+                        <div class="text-[9px] font-bold text-slate-400 uppercase tracking-wider mb-2 pb-1 border-b border-slate-100">Local Roads</div>
+                        
+                        <div class="flex items-center gap-3 mb-2">
+                            <div class="flex items-center justify-center w-6 h-6 rounded-full shadow-sm border border-white bg-red-600 shrink-0">
+                                <i aria-hidden="true" data-lucide="alert-triangle" class="w-3.5 h-3.5 text-white"></i>
+                            </div>
+                            <span class="text-xs text-slate-600 font-medium">Closed</span>
+                        </div>
+                        
+                        <div class="flex items-center gap-3 mb-2">
+                            <div class="flex items-center justify-center w-6 h-6 rounded-full shadow-sm border border-white bg-amber-500 shrink-0">
+                                <i aria-hidden="true" data-lucide="alert-circle" class="w-3.5 h-3.5 text-white"></i>
+                            </div>
+                            <span class="text-xs text-slate-600 font-medium">Partial / Caution</span>
+                        </div>
+
+                        <div class="flex items-center gap-3">
+                            <div class="flex items-center justify-center w-6 h-6 rounded-full shadow-sm border border-white bg-emerald-600 shrink-0">
+                                <i aria-hidden="true" data-lucide="check-circle" class="w-3.5 h-3.5 text-white"></i>
+                            </div>
+                            <span class="text-xs text-slate-600 font-medium">Open</span>
+                        </div>
+                    </div>
+
+                    <!-- State Highway / NZTA Data -->
+                    <div id="nztaLegend" class="hidden mt-3 pt-3 border-t border-slate-100 transition-all duration-300">
+                        <div class="text-[9px] font-bold text-slate-400 uppercase tracking-wider mb-2">NZTA Context (State Highways)</div>
+                        
+                        <div class="flex items-center gap-3 mb-2">
+                            <div class="flex items-center justify-center w-6 h-6 rounded-full shadow-sm border border-white bg-red-600 shrink-0">
+                                <i aria-hidden="true" data-lucide="alert-triangle" class="w-3.5 h-3.5 text-white"></i>
+                            </div>
+                            <span class="text-xs text-slate-600 font-medium">SH Closure</span>
+                        </div>
+                        
+                        <div class="flex items-center gap-3 mb-2">
+                            <div class="flex items-center justify-center w-6 h-6 rounded-full shadow-sm border border-white bg-amber-500 shrink-0">
+                                <i aria-hidden="true" data-lucide="alert-circle" class="w-3.5 h-3.5 text-white"></i>
+                            </div>
+                            <span class="text-xs text-slate-600 font-medium">SH Hazard</span>
+                        </div>
+
+                        <div class="flex items-center gap-3">
+                            <div class="flex items-center justify-center w-6 h-6 rounded-full shadow-sm border border-white bg-indigo-600 shrink-0">
+                                <i aria-hidden="true" data-lucide="megaphone" class="w-3.5 h-3.5 text-white"></i>
+                            </div>
+                            <span class="text-xs text-slate-600 font-medium">SH Information</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+\n    <!-- Loading Overlay -->
+    <div id="loadingOverlay" class="absolute inset-0 bg-slate-900/50 backdrop-blur-sm z-[100] flex flex-col items-center justify-center text-white hidden">
+        <i aria-hidden="true" data-lucide="loader-2" class="w-12 h-12 animate-spin mb-4 text-blue-400"></i>
+        <h2 class="text-xl font-semibold mb-2">Processing Network Data</h2>
+        <p id="loadingText" class="text-sm text-slate-300">Initializing...</p>
+    </div>
+
+    <!-- Welcome Modal -->
+    <div id="welcomeModal" class="fixed inset-0 bg-slate-900/80 backdrop-blur-md z-[200] flex items-center justify-center p-4">
+        <div class="bg-white rounded-2xl shadow-2xl max-w-lg w-full overflow-hidden animate-in fade-in zoom-in duration-300">
+            <div class="bg-blue-600 p-6 text-white">
+                <div class="flex items-center gap-3 mb-2">
+                    <div class="bg-white/20 p-2 rounded-lg">
+                        <i aria-hidden="true" data-lucide="info" class="w-6 h-6"></i>
+                    </div>
+                    <h2 class="text-xl font-bold">Network Status Overview</h2>
+                </div>
+                <p class="text-blue-100 text-sm">Important information and disclaimers regarding this website </p>
+            </div>
+            <div class="p-6 space-y-4 max-h-[60vh] overflow-y-auto">
+                <div class="space-y-3">
+                    <h3 class="font-bold text-slate-800 flex items-center gap-2">
+                        <i aria-hidden="true" data-lucide="map" class="w-4 h-4 text-blue-600"></i>
+                        Information Scope
+                    </h3>
+                    <p class="text-sm text-slate-600 leading-relaxed">
+                        This dashboard provides a real-time overview of known road issues and status updates within the network. 
+                        <strong>Please note:</strong> The issues listed are only the ones currently reported and verified. There may be other hazards or closures not yet reflected on this map.
+                    </p>
+                </div>
+
+                <div class="bg-amber-50 border border-amber-100 rounded-xl p-4 space-y-2">
+                    <h3 class="font-bold text-amber-800 flex items-center gap-2 text-sm">
+                        <i aria-hidden="true" data-lucide="shield-alert" class="w-4 h-4"></i>
+                        Safety Disclaimer
+                    </h3>
+                    <p class="text-xs text-amber-700 leading-relaxed">
+                        Always stay safe and use general caution when traveling. Do not rely on this application as your sole source of truth for navigation or safety decisions. Conditions can change rapidly.
+                    </p>
+                </div>
+
+                <div class="space-y-3 pt-2 border-t border-slate-100">
+                    <h3 class="font-bold text-slate-800 flex items-center gap-2 text-sm">
+                        <i aria-hidden="true" data-lucide="external-link" class="w-4 h-4 text-indigo-600"></i>
+                        NZTA Data Source
+                    </h3>
+                    <p class="text-sm text-slate-600 leading-relaxed">
+                        Information sourced from NZTA is provided for general advice only. This data is verified through the 
+                        <a href="https://www.journeys.nzta.govt.nz/" target="_blank" class="text-blue-600 hover:underline font-medium">NZTA Journey Planner</a>. 
+                        For critical travel decisions, please verify information directly through official NZTA channels.
+                    </p>
+                </div>
+            </div>
+            <div class="p-6 bg-slate-50 border-t border-slate-100 flex justify-end">
+                <button id="closeWelcome" class="bg-slate-800 hover:bg-slate-900 text-white px-6 py-2.5 rounded-xl font-bold transition-all shadow-lg hover:shadow-xl active:scale-95">
+                    I Understand
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // --- Accessibility Focus Trapping ---
+        function trapFocus(modalId, closeBtnId) {
+            const modal = document.getElementById(modalId);
+            const closeBtn = document.getElementById(closeBtnId);
+            if(!modal) return;
+            
+            const focusableElementsString = 'a[href], area[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), button:not([disabled]), iframe, object, embed, [tabindex="0"], [contenteditable]';
+            let focusableElements = Array.from(modal.querySelectorAll(focusableElementsString)).filter(el => !el.classList.contains('hidden') && el.offsetParent !== null);
+            
+            if(focusableElements.length === 0) return;
+            
+            const firstTabStop = focusableElements[0];
+            const lastTabStop = focusableElements[focusableElements.length - 1];
+
+            // Always focus the first element when opening
+            firstTabStop.focus();
+
+            modal.addEventListener('keydown', function(e) {
+                if (e.key === 'Tab') {
+                    // Refresh elements in case visibility changed
+                    focusableElements = Array.from(modal.querySelectorAll(focusableElementsString)).filter(el => !el.classList.contains('hidden') && el.offsetParent !== null);
+                    if(focusableElements.length === 0) return;
+                    const first = focusableElements[0];
+                    const last = focusableElements[focusableElements.length - 1];
+
+                    if (e.shiftKey) { 
+                        if (document.activeElement === first) {
+                            e.preventDefault();
+                            last.focus();
+                        }
+                    } else {
+                        if (document.activeElement === last) {
+                            e.preventDefault();
+                            first.focus();
+                        }
+                    }
+                }
+                if (e.key === 'Escape') {
+                    if (closeBtn) closeBtn.click();
+                }
+            });
+        }
+
+        // Welcome Modal Logic
+        const welcomeModal = document.getElementById('welcomeModal');
+        const closeWelcome = document.getElementById('closeWelcome');
+
+        closeWelcome.addEventListener('click', () => {
+            welcomeModal.classList.add('hidden');
+        });
+
+        // Initialize Icons
+        lucide.createIcons();
+
+        // Proj4js NZTM2000 definition
+        proj4.defs("EPSG:2193", "+proj=tmerc +lat_0=0 +lon_0=173 +k=0.9996 +x_0=1600000 +y_0=10000000 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs");
+
+        // State
+        let map;
+        let geoJsonLayer;
+        let iconLayer;
+        let allFeatures = [];
+        let selectedFeatureId = null;
+        let currentFilter = 'all';
+        let searchQuery = '';
+        let nztaLayer = null;
+
+        // DOM Elements
+        const loadingOverlay = document.getElementById('loadingOverlay');
+        const loadingText = document.getElementById('loadingText');
+        const featureList = document.getElementById('featureList');
+        const searchInput = document.getElementById('searchInput');
+        const sortSelect = document.getElementById('sortSelect');
+        const filterBtns = document.querySelectorAll('.filter-btn');
+        const analyticsDashboard = document.getElementById('analyticsDashboard');
+        const toggleAnalytics = document.getElementById('toggleAnalytics');
+        const linksBtn = document.getElementById('linksBtn');
+        const linksDropdown = document.getElementById('linksDropdown');
+        const closeAnalytics = document.getElementById('closeAnalytics');
+        const sidebar = document.getElementById('sidebar');
+        const toggleSidebarBtn = document.getElementById('toggleSidebar');
+        const sidebarIcon = document.getElementById('sidebarIcon');
+        const toggleNzta = document.getElementById('toggleNzta');
+
+        // Refresh Elements
+        const refreshBtn = document.getElementById('refreshBtn');
+        const autoRefreshBtn = document.getElementById('autoRefreshBtn');
+        let autoRefreshInterval = null;
+        let isRefreshing = false;
+
+        async function refreshData() {
+            if (isRefreshing) return;
+            isRefreshing = true;
+            
+            const refreshIcon = refreshBtn.querySelector('i, svg');
+            if (refreshIcon) refreshIcon.classList.add('animate-spin');
+            
+            try {
+                // Route through internal API proxy to bypass CORS
+                const url = '/api/proxy/ramm';
+                const response = await fetch(url);
+                if (!response.ok) {
+                    throw new Error(`Failed to fetch from proxy: HTTP ${response.status}`);
+                }
+                const rawData = await response.json();
+                allFeatures = processData(rawData);
+                updateUI();
+                
+                // Also refresh NZTA data if enabled
+                if (toggleNzta.checked) {
+                    fetchNztaData();
+                }
+
+                const now = new Date();
+                document.getElementById('lastUpdatedText').textContent = `Last updated: ${now.toLocaleTimeString()}`;
+                console.log('Data refreshed at:', now.toLocaleTimeString());
+            } catch (error) {
+                console.error('Refresh failed:', error);
+            } finally {
+                isRefreshing = false;
+                const refreshIcon = refreshBtn.querySelector('i, svg');
+                if (refreshIcon) refreshIcon.classList.remove('animate-spin');
+            }
+        }
+
+        refreshBtn.addEventListener('click', refreshData);
+
+        autoRefreshBtn.addEventListener('click', () => {
+            const refreshPeriod = document.getElementById('refreshPeriod');
+            if (autoRefreshInterval) {
+                clearInterval(autoRefreshInterval);
+                autoRefreshInterval = null;
+                autoRefreshBtn.textContent = 'AUTO OFF';
+                autoRefreshBtn.classList.remove('bg-green-600', 'text-white');
+                autoRefreshBtn.classList.add('text-slate-500');
+                if (refreshPeriod) refreshPeriod.classList.add('text-slate-400');
+                if (refreshPeriod) refreshPeriod.classList.remove('text-green-600', 'font-bold');
+            } else {
+                autoRefreshInterval = setInterval(refreshData, 300000); // 5 minutes
+                autoRefreshBtn.textContent = 'AUTO ON';
+                autoRefreshBtn.classList.remove('text-slate-500');
+                autoRefreshBtn.classList.add('bg-green-600', 'text-white');
+                if (refreshPeriod) refreshPeriod.classList.remove('text-slate-400');
+                if (refreshPeriod) refreshPeriod.classList.add('text-green-600', 'font-bold');
+                refreshData(); // Initial refresh
+            }
+        });
+
+        // Report Modal Elements
+        const reportDisclaimerModal = document.getElementById('reportDisclaimerModal');
+        const closeDisclaimerModal = document.getElementById('closeDisclaimerModal');
+        const proceedToReportBtn = document.getElementById('proceedToReportBtn');
+        const reportModal = document.getElementById('reportModal');
+        const reportIssueBtn = document.getElementById('reportIssueBtn');
+        const closeReportModal = document.getElementById('closeReportModal');
+        const reportForm = document.getElementById('reportForm');
+        const reportSuccess = document.getElementById('reportSuccess');
+        const closeSuccessBtn = document.getElementById('closeSuccessBtn');
+        const reportLocation = document.getElementById('reportLocation');
+        const existingReportsWarning = document.getElementById('existingReportsWarning');
+        const dropPinBtn = document.getElementById('dropPinBtn');
+        const useLocationBtn = document.getElementById('useLocationBtn');
+        const pinModeBanner = document.getElementById('pinModeBanner');
+        const cancelPinMode = document.getElementById('cancelPinMode');
+        const selectedCoords = document.getElementById('selectedCoords');
+        const coordsDisplay = document.getElementById('coordsDisplay');
+        const fabReportBtn = document.getElementById('fabReportBtn'); // Safe fallback if it doesn't exist
+        let reportMarker = null;
+        let isPinMode = false;
+
+        async function handlePinDrop(latlng) {
+            if (!isPinMode) return;
+            
+            const lat = latlng.lat.toFixed(5);
+            const lng = latlng.lng.toFixed(5);
+            
+            if (reportMarker) map.removeLayer(reportMarker);
+            reportMarker = L.marker([lat, lng]).addTo(map);
+            
+            coordsDisplay.textContent = `${lat}, ${lng}`;
+            document.getElementById('reportLat').value = lat;
+            document.getElementById('reportLng').value = lng;
+            selectedCoords.classList.remove('hidden');
+            
+            // Reverse geocode to get real road name
+            try {
+                const response = await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json`);
+                const data = await response.json();
+                if (data && data.display_name) {
+                    reportLocation.value = data.display_name;
+                } else {
+                    reportLocation.value = `${lat}, ${lng}`;
+                }
+                reportLocation.dataset.valid = 'true';
+                reportLocation.dataset.source = 'gps';
+            } catch (err) {
+                console.error('Reverse geocoding failed:', err);
+                reportLocation.value = `${lat}, ${lng}`;
+                reportLocation.dataset.valid = 'true';
+                reportLocation.dataset.source = 'gps';
+            }
+            
+            exitPinMode();
+            reportModal.classList.remove('hidden');
+            reportModal.classList.add('flex');
+            setTimeout(() => trapFocus('reportModal', 'closeReportModal'), 50);
+            
+            // Trigger input event to check for existing reports nearby
+            reportLocation.dispatchEvent(new Event('input'));
+        }
+
+        // Toggle Sidebar
+        function toggleSidebar() {
+            const isMobile = window.innerWidth < 768;
+            
+            if (!isMobile) {
+                sidebar.classList.toggle('md:-ml-96');
+                if (sidebar.classList.contains('md:-ml-96')) {
+                    toggleSidebarBtn.innerHTML = '<i aria-hidden="true" data-lucide="chevron-right" id="sidebarIcon" class="w-4 h-4"></i>';
+                } else {
+                    toggleSidebarBtn.innerHTML = '<i aria-hidden="true" data-lucide="chevron-left" id="sidebarIcon" class="w-4 h-4"></i>';
+                }
+            }
+            lucide.createIcons();
+            
+            setTimeout(() => {
+                if (map) map.invalidateSize();
+            }, 300);
+        }
+
+        toggleSidebarBtn.addEventListener('click', toggleSidebar);
+
+        function focusFeature(layer) {
+            if (!layer) return;
+            selectedFeatureId = layer.feature && layer.feature.processed ? layer.feature.processed.id : null;
+            if (typeof updateFeatureStyles === 'function') updateFeatureStyles();
+            
+            const isMobile = window.innerWidth < 768;
+            const latlng = layer.getBounds ? layer.getBounds().getCenter() : layer.getLatLng();
+            const targetZoom = 15;
+            
+            if (isMobile) {
+                // Wait for the drawer animation to clear if list view is active
+                const isListViewActive = typeof isListView !== 'undefined' && isListView;
+                if (isListViewActive && document.getElementById('navToggleViewBtn')) {
+                    document.getElementById('navToggleViewBtn').click();
+                }
+                
+                setTimeout(() => {
+                    // Mobile centering: 
+                    // To center the popup (which is ABOVE the pin), the pin needs to be near the bottom of the visible screen.
+                    // Instead of fitBounds padding (which is unreliable with openPopup), we project to pixels, shift, and unproject.
+                    // The map container is 100vh. There's a bottom nav (approx 64px) and top safe area.
+                    // Shifting the target point UP on the map canvas moves the apparent camera UP, which pushes the pin DOWN on screen.
+                    const targetPoint = map.project(latlng, targetZoom);
+                    // A typical popup is ~300-400px tall. We want to push the pin down by ~150-200px.
+                    targetPoint.y -= 180; 
+                    const newCenter = map.unproject(targetPoint, targetZoom);
+                    
+                    map.flyTo(newCenter, targetZoom, { animate: true, duration: 0.5 });
+                }, isListViewActive ? 300 : 0);
+            } else {
+                // Desktop centering: check if sidebar is visible
+                const isSidebarVisible = !document.getElementById('sidebar').classList.contains('md:-ml-96');
+                const targetPoint = map.project(latlng, targetZoom);
+                
+                // If sidebar (which is left-aligned on desktop) is open, shift camera LEFT to move pin RIGHT
+                // Sidebar is 384px wide (w-96). So we want to shift by around 192px.
+                if (isSidebarVisible) {
+                    targetPoint.x -= 200; 
+                }
+                
+                // Shift camera vertically to accommodate tall popups
+                targetPoint.y -= 250;
+                
+                const newCenter = map.unproject(targetPoint, targetZoom);
+                map.flyTo(newCenter, targetZoom, { animate: true, duration: 0.5 });
+            }
+        }
+        
+        let isListView = false;
+        const navToggleViewBtn = document.getElementById('navToggleViewBtn');
+        const navToggleIcon = document.getElementById('navToggleIcon');
+        const navToggleText = document.getElementById('navToggleText');
+
+        // Mobile Nav Listeners
+        if (navToggleViewBtn) {
+            navToggleViewBtn.addEventListener('click', () => {
+                isListView = !isListView;
+                if (isListView) {
+                    sidebar.classList.remove('translate-y-full');
+                    sidebar.classList.add('translate-y-0');
+                    navToggleIcon.setAttribute('data-lucide', 'map');
+                    navToggleText.textContent = 'Map';
+                } else {
+                    sidebar.classList.add('translate-y-full');
+                    sidebar.classList.remove('translate-y-0');
+                    navToggleIcon.setAttribute('data-lucide', 'list');
+                    navToggleText.textContent = 'List';
+                }
+                lucide.createIcons();
+            });
+        }
+        
+        const navRefreshBtnMobile = document.getElementById('navRefreshBtnMobile');
+        if (navRefreshBtnMobile) {
+            navRefreshBtnMobile.addEventListener('click', () => {
+                refreshData();
+            });
+        }
+
+        const navReportBtnMobile = document.getElementById('navReportBtnMobile');
+        if (navReportBtnMobile) {
+            navReportBtnMobile.addEventListener('click', () => {
+                window.pendingReportData = null;
+                reportDisclaimerModal.classList.remove('hidden');
+                setTimeout(() => trapFocus('reportDisclaimerModal', 'closeDisclaimerModal'), 50);
+                reportDisclaimerModal.classList.add('flex');
+                document.body.classList.add('overflow-hidden');
+            });
+        }
+        
+        const navAnalyticsBtn = document.getElementById('navAnalyticsBtn');
+        if (navAnalyticsBtn) {
+            navAnalyticsBtn.addEventListener('click', () => {
+                analyticsDashboard.classList.remove('hidden-slide');
+            });
+        }
+        
+        const navLinksBtn = document.getElementById('navLinksBtn');
+        if (navLinksBtn) {
+            navLinksBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                if(window.innerWidth < 768) {
+                    // Manually trigger links dropdown logic
+                    linksDropdown.classList.toggle('hidden');
+                    
+                    // Adjust for mobile view position if needed
+                    linksDropdown.classList.add('bottom-full', 'mb-2', 'right-auto', '-right-2');
+                    linksDropdown.classList.remove('mt-2');
+                }
+            });
+        }
+
+        // Initialize Map
+        function initMap() {
+            map = L.map('map', { zoomControl: false, attributionControl: false }).setView([-40.9006, 174.8860], 6);
+            L.control.zoom({ position: 'topright' }).addTo(map);
+            L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+                attribution: '&copy; OpenStreetMap contributors &copy; CARTO',
+                subdomains: 'abcd',
+                maxZoom: 20
+            }).addTo(map);
+
+            // Clear selection when clicking map background
+            map.on('click', (e) => {
+                if (isPinMode) return;
+                selectedFeatureId = null;
+                updateFeatureStyles();
+            });
+
+            // Center popup bubble when opened
+            map.on('popupopen', (e) => {
+                const popup = e.popup;
+                
+                const centerPopup = () => {
+                    lucide.createIcons();
+                    const container = popup.getElement();
+                    if (!container) return;
+                    
+                    const height = container.offsetHeight;
+                    const isMobile = window.innerWidth < 768;
+                    const sidebarOpen = !sidebar.classList.contains('md:-ml-96');
+                    const sidebarState = sidebar.getAttribute('data-state');
+                    
+                    let targetX = window.innerWidth / 2;
+                    let targetY = window.innerHeight / 2;
+                    
+                    if (!isMobile && sidebarOpen) {
+                        targetX = (window.innerWidth + 384) / 2;
+                    } else if (isMobile && sidebarState === 'partial') {
+                        targetY = (window.innerHeight * 0.6) / 2;
+                    }
+                    
+                    const anchorPos = map.latLngToContainerPoint(popup.getLatLng());
+                    const dx = anchorPos.x - targetX;
+                    const dy = (anchorPos.y - height/2) - targetY;
+                    
+                    if (Math.abs(dx) > 1 || Math.abs(dy) > 1) {
+                        map.panBy([dx, dy], { animate: true });
+                    }
+                };
+
+                // If the map is currently moving (e.g., from fitBounds), wait for it to finish
+                // before calculating the center, otherwise the coordinates will be wrong.
+                if (map._animating || map._panning) {
+                    map.once('moveend', () => setTimeout(centerPopup, 100));
+                } else {
+                    // Small delay to ensure the popup DOM is fully rendered for height calculation
+                    setTimeout(centerPopup, 150);
+                }
+            });
+
+            // Update feature sizes on zoom
+            map.on('zoomend', updateFeatureStyles);
+
+            addDistrictMask();
+        }
+
+        async function addDistrictMask() {
+            try {
+                // Fetch Whangarei District boundary from Nominatim
+                const response = await fetch('https://nominatim.openstreetmap.org/search?q=Whangarei+District,+New+Zealand&format=json&polygon_geojson=1');
+                const data = await response.json();
+                
+                if (data && data.length > 0 && data[0].geojson) {
+                    const districtGeoJSON = data[0].geojson;
+                    
+                    // Create a "world" polygon with a hole for the district
+                    // World bounds: [[-90, -180], [-90, 180], [90, 180], [90, -180]]
+                    // Leaflet uses [lat, lng] for L.polygon, but GeoJSON uses [lng, lat]
+                    const worldCoords = [
+                        [[-90, -180], [-90, 180], [90, 180], [90, -180]]
+                    ];
+                    
+                    const processRing = (ring) => {
+                        // Convert [lng, lat] to [lat, lng]
+                        return ring.map(coord => [coord[1], coord[0]]);
+                    };
+
+                    // Add the district coordinates as a hole
+                    if (districtGeoJSON.type === 'Polygon') {
+                        worldCoords.push(processRing(districtGeoJSON.coordinates[0]));
+                    } else if (districtGeoJSON.type === 'MultiPolygon') {
+                        districtGeoJSON.coordinates.forEach(poly => {
+                            worldCoords.push(processRing(poly[0]));
+                        });
+                    }
+                    
+                    L.polygon(worldCoords, {
+                        color: '#0f172a',
+                        weight: 0,
+                        fillColor: '#0f172a',
+                        fillOpacity: 0.3,
+                        interactive: false
+                    }).addTo(map);
+                    
+                    // Also add a subtle border for the district itself
+                    L.geoJSON(districtGeoJSON, {
+                        style: {
+                            color: '#3b82f6',
+                            weight: 2,
+                            opacity: 0.5,
+                            fillOpacity: 0,
+                            dashArray: '5, 10',
+                            interactive: false
+                        }
+                    }).addTo(map);
+                }
+            } catch (error) {
+                console.error('Failed to add district mask:', error);
+            }
+        }
+
+        async function fetchNztaData() {
+            if (!toggleNzta.checked) return;
+
+            showLoading('Fetching NZTA State Highway data...');
+            try {
+                const baseUrl = 'https://services.arcgis.com/CXBb7LAjgIIdcsPt/arcgis/rest/services/NZTA_Highway_Information/FeatureServer';
+                
+                // Filter for Road Closures, Road Hazards, and Area Warnings
+                // Layer 0: Points (Incidents)
+                // Layer 1: Lines (Area Events)
+                const query0 = "impact LIKE '%Closed%' OR eventType = 'Road Hazard'";
+                const query1 = "impact LIKE '%Closed%' OR eventType = 'Area Warning'";
+                const fields = "*";
+                
+                const [res0, res1] = await Promise.all([
+                    fetch(`${baseUrl}/0/query?where=${encodeURIComponent(query0)}&outFields=${fields}&f=json`),
+                    fetch(`${baseUrl}/1/query?where=${encodeURIComponent(query1)}&outFields=${fields}&f=json`)
+                ]);
+                
+                const [data0, data1] = await Promise.all([res0.json(), res1.json()]);
+                
+                const features = [
+                    ...(data0.features || []).map(f => ({ ...f, layerId: 0 })),
+                    ...(data1.features || []).map(f => ({ ...f, layerId: 1 }))
+                ];
+                
+                renderNztaData(features);
+            } catch (error) {
+                console.error('NZTA Fetch failed:', error);
+            } finally {
+                hideLoading();
+            }
+        }
+
+        function renderNztaData(features) {
+            if (nztaLayer) map.removeLayer(nztaLayer);
+            nztaLayer = L.layerGroup().addTo(map);
+            
+            features.forEach(f => {
+                const attr = f.attributes;
+                const geom = f.geometry;
+                if (!geom) return;
+                
+                let leafletLayer;
+                const isClosure = (attr.impact || '').toLowerCase().includes('closed');
+                const isHazard = attr.eventType === 'Road Hazard';
+                const isAreaWarning = attr.eventType === 'Area Warning';
+
+                let color = '#4f46e5'; // Indigo default
+                let icon = 'megaphone';
+                
+                if (isClosure) {
+                    color = '#dc2626'; // Red
+                    icon = 'alert-triangle';
+                } else if (isHazard) {
+                    color = '#f59e0b'; // Amber
+                    icon = 'alert-circle';
+                }
+
+                if (f.layerId === 0) {
+                    // Point
+                    const [lng, lat] = proj4("EPSG:2193", "EPSG:4326", [geom.x, geom.y]);
+                    leafletLayer = L.marker([lat, lng], {
+                        icon: L.divIcon({
+                            className: 'custom-div-icon',
+                            html: `<div class="w-8 h-8 rounded-full bg-${isClosure ? 'red' : (isHazard ? 'amber' : 'indigo')}-600 border-2 border-white shadow-lg flex items-center justify-center text-white">
+                                     <i aria-hidden="true" data-lucide="${icon}" class="w-5 h-5"></i>
+                                   </div>`,
+                            iconSize: [32, 32],
+                            iconAnchor: [16, 16]
+                        })
+                    });
+                } else if (f.layerId === 1 && geom.paths) {
+                    // Polyline
+                    const paths = geom.paths[0].map(p => {
+                        const [lng, lat] = proj4("EPSG:2193", "EPSG:4326", [p[0], p[1]]);
+                        return [lat, lng];
+                    });
+                    leafletLayer = L.polyline(paths, {
+                        color: isClosure ? '#dc2626' : (isHazard ? '#f59e0b' : '#4f46e5'),
+                        weight: 6,
+                        opacity: 0.8,
+                        dashArray: isAreaWarning ? '10, 10' : null
+                    });
+
+                    // Add icon marker at the center of the polyline
+                    const center = leafletLayer.getBounds().getCenter();
+                    const iconMarker = L.marker(center, {
+                        icon: L.divIcon({
+                            className: 'custom-div-icon',
+                            html: `<div class="w-8 h-8 rounded-full bg-${isClosure ? 'red' : (isHazard ? 'amber' : 'indigo')}-600 border-2 border-white shadow-lg flex items-center justify-center text-white">
+                                     <i aria-hidden="true" data-lucide="${icon}" class="w-5 h-5"></i>
+                                   </div>`,
+                            iconSize: [32, 32],
+                            iconAnchor: [16, 16]
+                        })
+                    });
+                    
+                    const popupContent = `
+                        <div class="custom-popup">
+                            <div class="bg-${isClosure ? 'red' : (isHazard ? 'amber' : 'indigo')}-600 text-white p-3">
+                                <div class="flex items-center gap-2 mb-1">
+                                    <i aria-hidden="true" data-lucide="${icon}" class="w-4 h-4"></i>
+                                    <span class="text-[10px] font-bold uppercase tracking-wider opacity-80">Uncontrolled Source</span>
+                                </div>
+                                <h3 class="font-bold text-sm leading-tight">${attr.locationArea || 'State Highway'}</h3>
+                            </div>
+                            <div class="p-3 space-y-3">
+                                <div class="flex items-center gap-2">
+                                    <span class="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase bg-${isClosure ? 'red' : (isHazard ? 'amber' : 'indigo')}-100 text-${isClosure ? 'red' : (isHazard ? 'amber' : 'indigo')}-700">
+                                        ${attr.eventType || 'Incident'}
+                                    </span>
+                                    <span class="text-[10px] font-medium text-slate-400">Status: ${attr.status || 'Active'}</span>
+                                </div>
+                                
+                                <div class="text-xs text-slate-600 leading-relaxed">
+                                    ${attr.eventComments || 'No additional comments provided.'}
+                                </div>
+
+                                <div class="pt-2 border-t border-slate-100">
+                                    <div class="text-[10px] font-bold text-slate-400 uppercase mb-1">Impact</div>
+                                    <div class="text-xs font-medium text-slate-700">${attr.impact || 'Caution'}</div>
+                                </div>
+
+                                <div class="bg-amber-50 border border-amber-100 rounded p-2 flex items-start gap-2">
+                                    <i aria-hidden="true" data-lucide="info" class="w-3 h-3 text-amber-600 mt-0.5"></i>
+                                    <div class="text-[9px] text-amber-700 leading-tight">
+                                        <strong>Disclaimer:</strong> This information is sourced from NZTA Open Data and is provided for context only. It is not managed by Whangarei District Council.
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                    
+                    const bindNztaPopup = (layer) => {
+                        layer.bindPopup(popupContent, { maxWidth: 300, autoPan: false, className: 'custom-popup-wrapper' });
+                        layer.on('click', (e) => {
+                            if (e.originalEvent) e.originalEvent.stopPropagation();
+                            focusFeature(layer);
+                            layer.openPopup();
+                        });
+                    };
+
+                    bindNztaPopup(iconMarker);
+                    bindNztaPopup(leafletLayer);
+                    
+                    iconMarker.addTo(nztaLayer);
+                    leafletLayer.addTo(nztaLayer);
+                    return; // Already added both
+                }
+                
+                if (!leafletLayer) return;
+
+                const popupContent = `
+                    <div class="custom-popup">
+                        <div class="bg-${isClosure ? 'red' : (isHazard ? 'amber' : 'indigo')}-600 text-white p-3">
+                            <div class="flex items-center gap-2 mb-1">
+                                <i aria-hidden="true" data-lucide="${icon}" class="w-4 h-4"></i>
+                                <span class="text-[10px] font-bold uppercase tracking-wider opacity-80">Uncontrolled Source</span>
+                            </div>
+                            <h3 class="font-bold text-sm leading-tight">${attr.locationArea || 'State Highway'}</h3>
+                        </div>
+                        <div class="p-3 space-y-3">
+                            <div class="flex items-center gap-2">
+                                <span class="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase bg-${isClosure ? 'red' : (isHazard ? 'amber' : 'indigo')}-100 text-${isClosure ? 'red' : (isHazard ? 'amber' : 'indigo')}-700">
+                                    ${attr.eventType || 'Incident'}
+                                </span>
+                                <span class="text-[10px] font-medium text-slate-400">Status: ${attr.status || 'Active'}</span>
+                            </div>
+                            
+                            <div class="text-xs text-slate-600 leading-relaxed">
+                                ${attr.eventComments || 'No additional comments provided.'}
+                            </div>
+
+                            <div class="pt-2 border-t border-slate-100">
+                                <div class="text-[10px] font-bold text-slate-400 uppercase mb-1">Impact</div>
+                                <div class="text-xs font-medium text-slate-700">${attr.impact || 'Caution'}</div>
+                            </div>
+
+                            <div class="bg-amber-50 border border-amber-100 rounded p-2 flex items-start gap-2">
+                                <i aria-hidden="true" data-lucide="info" class="w-3 h-3 text-amber-600 mt-0.5"></i>
+                                <div class="text-[9px] text-amber-700 leading-tight">
+                                    <strong>Disclaimer:</strong> This information is sourced from NZTA Open Data and is provided for context only. It is not managed by Whangarei District Council.
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+                
+                leafletLayer.bindPopup(popupContent, { maxWidth: 300, autoPan: false, className: 'custom-popup-wrapper' });
+                leafletLayer.on('click', (e) => {
+                    if (e.originalEvent) e.originalEvent.stopPropagation();
+                    focusFeature(leafletLayer);
+                    leafletLayer.openPopup();
+                });
+                leafletLayer.addTo(nztaLayer);
+            });
+            
+            lucide.createIcons();
+        }
+
+        function updateFeatureStyles() {
+            if (!geoJsonLayer || !iconLayer) return;
+            const zoom = map.getZoom();
+            
+            // Toggle Shape Layer
+            geoJsonLayer.eachLayer(layer => {
+                const feature = layer.feature;
+                if (!feature) return;
+                
+                const isSelected = feature.processed.id === selectedFeatureId;
+                const severity = feature.processed.severity;
+                
+                if (layer.setStyle) {
+                    // For lines/polygons
+                    const baseWeight = severity === 'critical' ? 8 : 6;
+                    const multiplier = zoom < 8 ? 2.5 : (zoom < 11 ? 1.8 : 1);
+                    layer.setStyle({ 
+                        weight: baseWeight * multiplier,
+                        opacity: isSelected ? 0.9 : 0,
+                        fillOpacity: isSelected ? 0.2 : 0,
+                        interactive: true // Keep interactive so we can click them
+                    });
+                }
+                
+                if (layer.setRadius) {
+                    layer.setStyle({
+                        opacity: isSelected ? 1 : 0,
+                        fillOpacity: isSelected ? 1 : 0,
+                        interactive: true
+                    });
+                }
+            });
+
+            // Toggle Icon Layer
+            iconLayer.eachLayer(layer => {
+                const isSelected = layer.featureId === selectedFeatureId;
+                if (layer.getElement) {
+                    const el = layer.getElement();
+                    if (el) el.style.display = isSelected ? 'none' : 'block';
+                }
+            });
+        }
+
+        // UI Helpers
+        function showLoading(text) {
+            loadingText.textContent = text;
+            loadingOverlay.classList.remove('hidden');
+        }
+        function hideLoading() {
+            loadingOverlay.classList.add('hidden');
+        }
+
+        // Fetch with timeout & fallbacks
+        async function fetchWithFallbacks(url, timeoutMs = 10000) {
+            const fetchTimeout = (url, ms) => {
+                const controller = new AbortController();
+                const id = setTimeout(() => controller.abort(), ms);
+                return fetch(url, { signal: controller.signal }).finally(() => clearTimeout(id));
+            };
+
+            const endpoints = [
+                { u: url, t: timeoutMs },
+                { u: `https://corsproxy.io/?${encodeURIComponent(url)}`, t: 15000 },
+                { u: `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`, t: 15000 }
+            ];
+
+            for (let ep of endpoints) {
+                try {
+                    const res = await fetchTimeout(ep.u, ep.t);
+                    if (res.ok) return await res.json();
+                } catch (e) {
+                    console.warn(`Fetch failed for ${ep.u}:`, e);
+                }
+            }
+            throw new Error("All fetch attempts failed.");
+        }
+
+        // Coordinate Fixing
+        function fixCoords(coords) {
+            if (typeof coords[0] === 'number') {
+                let x = coords[0], y = coords[1];
+                if (x < 0 && y > 0) { x = coords[1]; y = coords[0]; }
+                if (x > 100000 || y > 100000) {
+                    try {
+                        const projected = proj4("EPSG:2193", "EPSG:4326", [x, y]);
+                        return [projected[0], projected[1]];
+                    } catch(e) { return [x, y]; }
+                }
+                return [x, y];
+            }
+            return coords.map(fixCoords);
+        }
+
+        // Data Processing
+        function processData(geojson) {
+            const features = geojson.features || [];
+            
+            features.forEach(f => {
+                const p = f.properties || {};
+                
+                // Heuristics
+                const roadName = String(p.road_id || p['road id'] || p.road_name || p.street || p.location || 'Unknown Road').trim();
+                const desc = String(p.c_description || p['c description'] || p.cause || p.reason || p.description || 'No description provided.').trim();
+                
+                const cause = String(p.cause || p.reason || p.type || 'Unknown').trim();
+                const status = String(p.status || p.road_status || p.current_status || 'Unknown').trim();
+                
+                const statusLower = status.toLowerCase();
+                let severity = 'warning';
+                if (statusLower === 'open' || statusLower === 'road open') {
+                    severity = 'success';
+                } else if (statusLower.includes('close')) {
+                    severity = 'critical';
+                }
+                
+                const startStr = p.start || p.from || p.start_date || p.date_start || p.s_datetime;
+                const endStr = p.end || p.to || p.end_date || p.date_end || p.e_datetime;
+                const expectedResolution = p.estimated_outage || p.expected_resolution || p.resolution || p.expected_end || endStr || 'Unknown';
+                const infoUpdated = p.info_updated || 'Unknown';
+                
+                let formattedOutage = expectedResolution;
+                if (formattedOutage !== 'Unknown') {
+                    const d = new Date(formattedOutage);
+                    if (!isNaN(d)) formattedOutage = d.toLocaleString();
+                }
+
+                let formattedInfoUpdated = infoUpdated;
+                if (formattedInfoUpdated !== 'Unknown') {
+                    const d = new Date(formattedInfoUpdated);
+                    if (!isNaN(d)) formattedInfoUpdated = d.toLocaleString();
+                }
+
+                let durationDays = 0;
+                if (startStr && endStr) {
+                    const s = new Date(startStr);
+                    const e = new Date(endStr);
+                    if (!isNaN(s) && !isNaN(e)) {
+                        durationDays = Math.max(0, Math.round((e - s) / (1000 * 60 * 60 * 24)));
+                    }
+                }
+
+                const detour = String(p.detour_details || p.detour || p.alt_route || p.alternative_route || 'None').trim();
+                const plannedActions = String(p.planned_action || p.planned_actions || p.actions || p.next_steps || 'None').trim();
+                const start_m = p.start_m || p.Start_m || p.Start_M || p.start_M || '';
+                const id = p.system_id || p.System_ID || p.id || p.OBJECTID || `feat-${idx}`;
+
+                f.geometry.coordinates = fixCoords(f.geometry.coordinates);
+                
+                f.processed = { id, roadName, start_m, desc, severity, cause, status, startStr, endStr, expectedResolution, formattedOutage, formattedInfoUpdated, durationDays, detour, plannedActions, raw: p };
+            });
+
+            return features.filter(f => f.geometry && f.geometry.coordinates);
+        }
+
+        // Render Map
+        function renderMap(features) {
+            if (geoJsonLayer) map.removeLayer(geoJsonLayer);
+            if (iconLayer) map.removeLayer(iconLayer);
+            
+            iconLayer = L.layerGroup().addTo(map);
+
+            geoJsonLayer = L.geoJSON(features, {
+                style: (feature) => {
+                    const severity = feature.processed.severity;
+                    const color = severity === 'critical' ? '#ef4444' : (severity === 'success' ? '#10b981' : '#f59e0b');
+                    return {
+                        color: color,
+                        weight: severity === 'critical' ? 8 : 6,
+                        dashArray: severity === 'critical' ? '' : '5, 10',
+                        opacity: 0.9,
+                        lineCap: 'round',
+                        lineJoin: 'round',
+                        fillOpacity: 0.2,
+                        fillColor: color
+                    };
+                },
+                pointToLayer: (feature, latlng) => {
+                    // We handle points via the iconLayer for consistency when zoomed out
+                    return L.circleMarker(latlng, {
+                        radius: 1,
+                        opacity: 0,
+                        fillOpacity: 0,
+                        interactive: false
+                    });
+                },
+                onEachFeature: (feature, layer) => {
+                    const p = feature.processed;
+                    const severity = p.severity;
+                    
+                    // Create centroid icon for this feature
+                    let center;
+                    if (layer.getBounds) center = layer.getBounds().getCenter();
+                    else if (layer.getLatLng) center = layer.getLatLng();
+                    
+                    if (center) {
+                        let iconName, iconColor, bgColor;
+                        if (severity === 'critical') {
+                            iconName = 'alert-triangle';
+                            iconColor = '#fff';
+                            bgColor = 'bg-red-600';
+                        } else if (severity === 'success') {
+                            iconName = 'check-circle';
+                            iconColor = '#fff';
+                            bgColor = 'bg-emerald-600';
+                        } else {
+                            iconName = 'alert-circle';
+                            iconColor = '#fff';
+                            bgColor = 'bg-amber-500';
+                        }
+
+                        const iconHtml = `
+                            <div class="flex items-center justify-center w-8 h-8 rounded-full shadow-lg border-2 border-white ${bgColor} transform hover:scale-110 transition-transform">
+                                <i aria-hidden="true" data-lucide="${iconName}" class="w-5 h-5 text-white"></i>
+                            </div>
+                        `;
+
+                        const customIcon = L.divIcon({
+                            html: iconHtml,
+                            className: 'custom-div-icon',
+                            iconSize: [32, 32],
+                            iconAnchor: [16, 16]
+                        });
+
+                        const marker = L.marker(center, { icon: customIcon }).addTo(iconLayer);
+                        marker.featureId = feature.processed.id;
+                        
+                        // Sync events
+                        marker.on('click', (e) => {
+                            if (e.originalEvent) e.originalEvent.stopPropagation();
+                            focusFeature(layer);
+                            layer.openPopup();
+                        });
+                    }
+
+                    layer.on('click', (e) => {
+                        if (e.originalEvent) e.originalEvent.stopPropagation();
+                        if (isPinMode) {
+                            handlePinDrop(e.latlng);
+                            return;
+                        }
+                        focusFeature(layer);
+                    });
+                    
+                    let badgeClass, icon, headerBg;
+                    if (severity === 'critical') {
+                        badgeClass = 'bg-red-100 text-red-800';
+                        icon = 'alert-triangle';
+                        headerBg = 'bg-red-600';
+                    } else if (severity === 'success') {
+                        badgeClass = 'bg-emerald-100 text-emerald-800';
+                        icon = 'check-circle';
+                        headerBg = 'bg-emerald-600';
+                    } else {
+                        badgeClass = 'bg-amber-100 text-amber-800';
+                        icon = 'alert-circle';
+                        headerBg = 'bg-amber-500';
+                    }
+                    
+                    // Curated fields for the popup
+                    const relevantFields = {
+                        'Status': p.raw.status || p.raw.Status,
+                        'Cause': p.raw.cause || p.raw.Cause,
+                        'Date Validated': p.formattedInfoUpdated,
+                        'Location': p.raw.location || p.raw.Location,
+                        'Contractor': p.raw.contractor || p.raw.Contractor
+                    };
+
+                    let rawHtml = '<div class="text-xs mt-3 border-t pt-2">';
+                    rawHtml += '<table class="w-full text-left border-collapse">';
+                    for (const [key, val] of Object.entries(relevantFields)) {
+                        if (val === null || val === '' || val === undefined) continue;
+                        rawHtml += `<tr class="border-b border-slate-100"><td class="py-1.5 pr-2 font-medium text-slate-500">${key}</td><td class="py-1.5 text-slate-800 break-words">${val}</td></tr>`;
+                    }
+                    rawHtml += '</table></div>';
+
+                    const popupContent = `
+                        <div class="custom-popup bg-white w-full max-h-[60vh] overflow-y-auto">
+                            <div class="${headerBg} text-white p-3 flex items-start gap-2 sticky top-0 z-10 shadow-sm">
+                                <i aria-hidden="true" data-lucide="${icon}" class="w-5 h-5 mt-0.5 shrink-0"></i>
+                                <div>
+                                    <h3 class="font-bold text-base leading-tight">${p.roadName}${p.start_m ? ` (${p.start_m}m)` : ''}</h3>
+                                    <span class="inline-block px-2 py-0.5 mt-1 text-[10px] font-bold uppercase tracking-wider rounded-full bg-white/20">${p.status}</span>
+                                </div>
+                            </div>
+                            <div class="p-3">
+                                <div class="bg-blue-50 text-blue-800 p-2 rounded-md mb-3 text-xs border border-blue-100">
+                                    <span class="font-bold block mb-0.5">Expected Resolution:</span>
+                                    <span>${p.formattedOutage}</span>
+                                </div>
+                                <p class="text-sm text-slate-700 mb-3">${p.desc}</p>
+                                <div class="flex flex-col gap-2 text-xs mb-2">
+                                    <div class="bg-slate-50 p-2 rounded border border-slate-100">
+                                        <span class="block text-slate-400 font-medium mb-0.5">Planned Actions</span>
+                                        <span class="font-semibold text-slate-700 block whitespace-pre-wrap break-words">${p.plannedActions}</span>
+                                    </div>
+                                    <div class="bg-slate-50 p-2 rounded border border-slate-100">
+                                        <span class="block text-slate-400 font-medium mb-0.5">Detour</span>
+                                        <span class="font-semibold text-slate-700 block whitespace-pre-wrap break-words">${p.detour}</span>
+                                    </div>
+                                </div>
+                                ${rawHtml}
+                                <div class="sticky bottom-0 bg-white pt-2 mt-2 border-t border-slate-100 pb-1">
+                                    <button onclick="window.openUpdateFromPopup('${(p.roadName || '').replace(/'/g, "\\'")}', '${(p.start_m || '').toString().replace(/'/g, "\\'")}', '${(p.raw.system_id || p.raw.System_ID || p.raw.id || p.raw.OBJECTID || '').toString().replace(/'/g, "\\'")}', ${center.lat}, ${center.lng}, '${(p.status || '').replace(/'/g, "\\'")}')" class="w-full flex items-center justify-center gap-1 bg-slate-100 hover:bg-slate-200 text-slate-700 py-3 md:py-2 rounded-md text-sm font-medium transition-colors border border-slate-200 min-h-[44px]">
+                                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+                                        Provide Update
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                    layer.bindPopup(popupContent, { 
+                        className: 'custom-popup-wrapper',
+                        autoPan: false
+                    });
+                }
+            });
+
+            geoJsonLayer.addTo(map);
+            updateFeatureStyles(); // Initial style application
+            if (features.length > 0) {
+                map.fitBounds(geoJsonLayer.getBounds(), { padding: [20, 20] });
+            }
+            lucide.createIcons();
+        }
+
+        // Render Sidebar
+        function renderSidebar(features) {
+            featureList.innerHTML = '';
+            if (features.length === 0) {
+                featureList.innerHTML = '<div class="p-4 text-center text-sm text-slate-500">No issues found matching criteria.</div>';
+                return;
+            }
+
+            features.forEach((f, index) => {
+                const p = f.processed;
+                const severity = p.severity;
+                
+                let borderClass, badgeClass;
+                if (severity === 'critical') {
+                    borderClass = 'border-l-red-500';
+                    badgeClass = 'bg-red-100 text-red-700';
+                } else if (severity === 'success') {
+                    borderClass = 'border-l-emerald-500';
+                    badgeClass = 'bg-emerald-100 text-emerald-700';
+                } else {
+                    borderClass = 'border-l-amber-500';
+                    badgeClass = 'bg-amber-100 text-amber-700';
+                }
+
+                const el = document.createElement('div');
+                el.className = `p-3 rounded-lg border bg-white cursor-pointer hover:shadow-md transition-shadow border-l-4 ${borderClass} border-slate-200`;
+                el.innerHTML = `
+                    <div class="flex justify-between items-start mb-1">
+                        <h4 class="font-bold text-sm text-slate-800 line-clamp-1" title="${p.roadName}">${p.roadName}${p.start_m ? ` (${p.start_m}m)` : ''}</h4>
+                        <span class="text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded ${badgeClass}">${p.status}</span>
+                    </div>
+                    <div class="text-[10px] font-semibold text-slate-500 mb-1 uppercase tracking-tight flex items-center gap-1">
+                        <i aria-hidden="true" data-lucide="info" class="w-2.5 h-2.5"></i>
+                        <span>Cause: ${p.cause}</span>
+                    </div>
+                    <p class="text-xs text-slate-500 line-clamp-2 mb-2" title="${p.desc}">${p.desc}</p>
+                    <div class="flex flex-col gap-1 mb-2">
+                        <div class="flex items-center text-[10px] text-slate-500 gap-2 px-1">
+                            <i aria-hidden="true" data-lucide="refresh-cw" class="w-3 h-3 shrink-0"></i>
+                            <span class="truncate">Updated: ${p.formattedInfoUpdated}</span>
+                        </div>
+                        <div class="flex items-center text-[10px] text-slate-600 gap-2 bg-slate-100 p-1.5 rounded border border-slate-200">
+                            <i aria-hidden="true" data-lucide="clock" class="w-3 h-3 shrink-0"></i>
+                            <span class="truncate font-medium">Estimated Resolution: ${p.formattedOutage}</span>
+                        </div>
+                    </div>
+                    <button class="update-btn w-full mt-1 flex items-center justify-center gap-1 bg-slate-100 hover:bg-slate-200 text-slate-700 py-1.5 rounded text-xs font-medium transition-colors border border-slate-200">
+                        <i aria-hidden="true" data-lucide="edit-3" class="w-3 h-3"></i> Provide Update
+                    </button>
+                `;
+                el.addEventListener('click', () => {
+                    const layers = geoJsonLayer.getLayers();
+                    const layer = layers[index];
+                    if (layer) {
+                        focusFeature(layer);
+                        layer.openPopup();
+                    }
+                });
+                
+                const updateBtn = el.querySelector('.update-btn');
+                updateBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    const layers = geoJsonLayer.getLayers();
+                    const layer = layers[index];
+                    let lat = 0, lng = 0;
+                    if (layer) {
+                        let center;
+                        if (layer.getBounds) center = layer.getBounds().getCenter();
+                        else if (layer.getLatLng) center = layer.getLatLng();
+                        if (center) {
+                            lat = center.lat;
+                            lng = center.lng;
+                        }
+                    }
+                    window.openUpdateFromPopup(
+                        p.roadName, 
+                        p.start_m, 
+                        p.raw.system_id || p.raw.System_ID || p.raw.id || p.raw.OBJECTID || '',
+                        lat,
+                        lng,
+                        p.status
+                    );
+                });
+                
+                featureList.appendChild(el);
+            });
+            lucide.createIcons();
+        }
+
+        // Update UI
+        function updateUI() {
+            const q = searchQuery.toLowerCase();
+            let filtered = allFeatures.filter(f => {
+                const p = f.processed;
+                const matchSearch = p.roadName.toLowerCase().includes(q) || p.desc.toLowerCase().includes(q);
+                const matchFilter = currentFilter === 'all' || p.severity === currentFilter;
+                return matchSearch && matchFilter;
+            });
+
+            // Sorting logic
+            const sortVal = sortSelect.value;
+            filtered.sort((a, b) => {
+                const pA = a.processed;
+                const pB = b.processed;
+                
+                if (sortVal === 'name_asc') {
+                    return pA.roadName.localeCompare(pB.roadName);
+                } else if (sortVal === 'name_desc') {
+                    return pB.roadName.localeCompare(pA.roadName);
+                } else if (sortVal === 'updated_desc') {
+                    const dateA = new Date(pA.raw.info_updated || pA.raw.last_validated || 0).getTime();
+                    const dateB = new Date(pB.raw.info_updated || pB.raw.last_validated || 0).getTime();
+                    return dateB - dateA;
+                } else if (sortVal === 'updated_asc') {
+                    const dateA = new Date(pA.raw.info_updated || pA.raw.last_validated || 0).getTime();
+                    const dateB = new Date(pB.raw.info_updated || pB.raw.last_validated || 0).getTime();
+                    return dateA - dateB;
+                } else if (sortVal === 'severity') {
+                    const sevScore = { 'critical': 3, 'warning': 2, 'success': 1 };
+                    return (sevScore[pB.severity] || 0) - (sevScore[pA.severity] || 0);
+                }
+                return 0;
+            });
+
+            renderMap(filtered);
+            renderSidebar(filtered);
+            updateAnalytics(filtered);
+        }
+
+        // Analytics
+        function updateAnalytics(features) {
+            const criticals = features.filter(f => f.processed.severity === 'critical');
+            const warnings = features.filter(f => f.processed.severity === 'warning');
+            
+            document.getElementById('statTotal').textContent = features.length;
+            document.getElementById('statCritical').textContent = criticals.length;
+            document.getElementById('statWarning').textContent = warnings.length;
+            
+            const withDuration = features.filter(f => f.processed.durationDays > 0);
+            const avgDur = withDuration.length ? Math.round(withDuration.reduce((sum, f) => sum + f.processed.durationDays, 0) / withDuration.length) : 0;
+            document.getElementById('statAvgDuration').textContent = avgDur;
+
+            // Common Causes
+            const causeCounts = {};
+            features.forEach(f => {
+                let cause = f.processed.cause || "Unknown";
+                causeCounts[cause] = (causeCounts[cause] || 0) + 1;
+            });
+            const topCauses = Object.entries(causeCounts).sort((a, b) => b[1] - a[1]).slice(0, 5);
+            document.getElementById('listCauses').innerHTML = topCauses.map(([cause, count]) => 
+                `<li class="flex justify-between items-center text-sm border-b border-slate-100 pb-1"><span class="text-slate-700 truncate pr-2" title="${cause}">${cause}</span><span class="bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full text-xs font-medium">${count}</span></li>`
+            ).join('');
+
+            // State of Play Infographic
+            const total = features.length;
+            if (total > 0) {
+                const closed = features.filter(f => f.processed.severity === 'critical').length;
+                const partial = features.filter(f => f.processed.severity === 'warning').length;
+                const open = features.filter(f => f.processed.severity === 'success').length;
+
+                const closedPct = Math.round((closed / total) * 100) || 0;
+                const partialPct = Math.round((partial / total) * 100) || 0;
+                const openPct = Math.round((open / total) * 100) || 0;
+
+                // Expected Resolution Breakdown
+                const now = new Date();
+                const tomorrow = new Date(now); tomorrow.setDate(tomorrow.getDate() + 1);
+                const nextWeek = new Date(now); nextWeek.setDate(nextWeek.getDate() + 7);
+
+                let res24h = 0, res7d = 0, resLater = 0, resUnknown = 0;
+                features.forEach(f => {
+                    const d = new Date(f.processed.expectedResolution);
+                    if (isNaN(d)) {
+                        resUnknown++;
+                    } else if (d <= tomorrow) {
+                        res24h++;
+                    } else if (d <= nextWeek) {
+                        res7d++;
+                    } else {
+                        resLater++;
+                    }
+                });
+
+                document.getElementById('stateOfPlay').innerHTML = `
+                    <div class="mb-4">
+                        <div class="flex justify-between text-xs font-medium text-slate-500 mb-1">
+                            <span>Severity Breakdown</span>
+                            <span>${total} Total Issues</span>
+                        </div>
+                        <div class="w-full h-4 flex rounded-full overflow-hidden">
+                            <div class="bg-red-500 flex items-center justify-center text-[10px] text-white font-bold transition-all duration-500" style="width: ${closedPct}%" title="Closed: ${closed}">${closedPct > 10 ? closedPct + '%' : ''}</div>
+                            <div class="bg-amber-400 flex items-center justify-center text-[10px] text-white font-bold transition-all duration-500" style="width: ${partialPct}%" title="Partial: ${partial}">${partialPct > 10 ? partialPct + '%' : ''}</div>
+                            <div class="bg-emerald-500 flex items-center justify-center text-[10px] text-white font-bold transition-all duration-500" style="width: ${openPct}%" title="Open: ${open}">${openPct > 10 ? openPct + '%' : ''}</div>
+                        </div>
+                        <div class="flex justify-between text-[10px] text-slate-500 mt-2 px-1">
+                            <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-red-500"></span> Closed (${closed})</span>
+                            <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-amber-400"></span> Partial (${partial})</span>
+                            <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-emerald-500"></span> Open (${open})</span>
+                        </div>
+                    </div>
+                    
+                    <div class="mt-6">
+                        <div class="text-xs font-medium text-slate-500 mb-2">Resolution Forecast</div>
+                        <div class="grid grid-cols-4 gap-2 text-center">
+                            <div class="bg-slate-50 rounded p-2 border border-slate-100">
+                                <div class="text-lg font-bold text-slate-700">${res24h}</div>
+                                <div class="text-[10px] text-slate-500 uppercase tracking-wider">&lt; 24h</div>
+                            </div>
+                            <div class="bg-slate-50 rounded p-2 border border-slate-100">
+                                <div class="text-lg font-bold text-slate-700">${res7d}</div>
+                                <div class="text-[10px] text-slate-500 uppercase tracking-wider">1-7 Days</div>
+                            </div>
+                            <div class="bg-slate-50 rounded p-2 border border-slate-100">
+                                <div class="text-lg font-bold text-slate-700">${resLater}</div>
+                                <div class="text-[10px] text-slate-500 uppercase tracking-wider">&gt; 7 Days</div>
+                            </div>
+                            <div class="bg-slate-50 rounded p-2 border border-slate-100">
+                                <div class="text-lg font-bold text-slate-700">${resUnknown}</div>
+                                <div class="text-[10px] text-slate-500 uppercase tracking-wider">Unknown</div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            } else {
+                document.getElementById('stateOfPlay').innerHTML = '<div class="text-sm text-slate-500">No data available.</div>';
+            }
+        }
+
+        // Event Listeners
+        searchInput.addEventListener('input', (e) => {
+            searchQuery = e.target.value;
+            updateUI();
+        });
+
+        sortSelect.addEventListener('change', () => {
+            updateUI();
+        });
+
+        filterBtns.forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                filterBtns.forEach(b => {
+                    b.classList.remove('bg-slate-800', 'text-white');
+                    b.classList.add('bg-slate-100', 'text-slate-600');
+                });
+                e.target.classList.remove('bg-slate-100', 'text-slate-600');
+                e.target.classList.add('bg-slate-800', 'text-white');
+                currentFilter = e.target.dataset.filter;
+                updateUI();
+            });
+        });
+
+        toggleAnalytics.addEventListener('click', () => {
+            analyticsDashboard.classList.toggle('hidden-slide');
+        });
+
+        closeAnalytics.addEventListener('click', () => {
+            analyticsDashboard.classList.add('hidden-slide');
+        });
+
+        // Toggle Handy Links Dropdown
+        linksBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            linksDropdown.classList.toggle('hidden');
+        });
+
+        document.addEventListener('click', (e) => {
+            if (!linksBtn.contains(e.target) && !linksDropdown.contains(e.target)) {
+                linksDropdown.classList.add('hidden');
+            }
+        });
+
+        // Toggle NZTA Data
+        toggleNzta.addEventListener('change', () => {
+            const nztaLegend = document.getElementById('nztaLegend');
+            if (toggleNzta.checked) {
+                fetchNztaData();
+                if (nztaLegend) nztaLegend.classList.remove('hidden');
+            } else {
+                if (nztaLayer) map.removeLayer(nztaLayer);
+                nztaLayer = null;
+                if (nztaLegend) nztaLegend.classList.add('hidden');
+            }
+        });
+
+        // Report Modal Logic
+        function openReportModal(prefilledData = null) {
+            reportModal.classList.remove('hidden');
+            reportModal.classList.add('flex');
+            reportForm.classList.remove('hidden');
+            document.getElementById('reportFormActions').classList.remove('hidden');
+            reportSuccess.classList.add('hidden');
+            reportForm.reset();
+            
+            // Reset fields state
+            reportLocation.readOnly = false;
+            reportLocation.classList.remove('bg-slate-50', 'text-slate-500', 'cursor-not-allowed');
+            document.getElementById('reportType').disabled = false;
+            document.getElementById('reportType').classList.remove('bg-slate-50', 'text-slate-500', 'cursor-not-allowed');
+            
+            // Reset location buttons visibility
+            dropPinBtn.classList.remove('hidden');
+            useLocationBtn.classList.remove('hidden');
+            dropPinBtn.disabled = false;
+            dropPinBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+            useLocationBtn.disabled = false;
+            useLocationBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+
+            // Reset status buttons
+            document.querySelectorAll('.status-btn').forEach(btn => {
+                btn.classList.remove('bg-slate-100', 'border-slate-800', 'text-slate-900', 'ring-2', 'ring-slate-800/10');
+                btn.classList.add('border-slate-200', 'text-slate-500');
+            });
+            document.getElementById('reportStatus').value = '';
+
+            // Reset error states
+            document.querySelectorAll('[id^="error-"]').forEach(el => el.classList.add('hidden'));
+            document.querySelectorAll('.border-red-500').forEach(el => el.classList.remove('border-red-500'));
+            document.getElementById('statusButtonsContainer').classList.remove('bg-red-50', 'ring-1', 'ring-red-200');
+
+            existingReportsWarning.classList.add('hidden');
+            selectedCoords.classList.add('hidden');
+            if (reportMarker) {
+                map.removeLayer(reportMarker);
+                reportMarker = null;
+            }
+            reportLocation.dataset.valid = 'false';
+            reportLocation.dataset.source = 'manual';
+            document.getElementById('reportSystemId').value = '';
+            document.getElementById('reportLat').value = '';
+            document.getElementById('reportLng').value = '';
+            
+            if (prefilledData) {
+                if (prefilledData.location) {
+                    reportLocation.value = prefilledData.location;
+                    reportLocation.dataset.valid = 'true';
+                    reportLocation.dataset.source = 'gps'; // Ensure updates bypass text digit validation
+                    document.getElementById('coordsDisplay').textContent = "Selected from existing issue";
+                    selectedCoords.classList.remove('hidden');
+                }
+                if (prefilledData.type) {
+                    document.getElementById('reportType').value = prefilledData.type;
+                    
+                    // If it's an update, lock the location and type, and hide location buttons
+                    if (prefilledData.type === 'update') {
+                        reportLocation.readOnly = true;
+                        reportLocation.classList.add('bg-slate-50', 'text-slate-500', 'cursor-not-allowed');
+                        document.getElementById('reportType').disabled = true;
+                        document.getElementById('reportType').classList.add('bg-slate-50', 'text-slate-500', 'cursor-not-allowed');
+                        
+                        dropPinBtn.classList.add('hidden');
+                        useLocationBtn.classList.add('hidden');
+                    }
+                }
+                if (prefilledData.desc) {
+                    document.getElementById('reportDesc').value = prefilledData.desc;
+                }
+                if (prefilledData.systemId) {
+                    document.getElementById('reportSystemId').value = prefilledData.systemId;
+                }
+                if (prefilledData.lat && prefilledData.lng) {
+                    document.getElementById('reportLat').value = prefilledData.lat;
+                    document.getElementById('reportLng').value = prefilledData.lng;
+                    document.getElementById('coordsDisplay').textContent = `${prefilledData.lat}, ${prefilledData.lng}`;
+                }
+                if (prefilledData.status) {
+                    const status = prefilledData.status.toLowerCase();
+                    let mappedStatus = '';
+                    if (status.includes('close')) mappedStatus = 'Closed';
+                    else if (status.includes('open')) mappedStatus = 'Open';
+                    else if (status.includes('restrict') || status.includes('warning') || status.includes('partial')) mappedStatus = 'Restricted';
+                    
+                    if (mappedStatus) {
+                        const btn = document.querySelector(`.status-btn[data-status="${mappedStatus}"]`);
+                        if (btn) btn.click();
+                    }
+                }
+            }
+        }
+
+        window.openUpdateFromPopup = function(roadName, startM, systemId, lat, lng, currentStatus) {
+            // Store the prefilled data first
+            window.pendingReportData = {
+                location: `${roadName}${startM ? ` (start_m: ${startM})` : ''}`,
+                type: 'update',
+                desc: `Update for existing issue:\n\n`,
+                systemId: systemId,
+                lat: lat,
+                lng: lng,
+                status: currentStatus
+            };
+
+            // Show disclaimer modal
+            const disclaimer = document.getElementById('reportDisclaimerModal');
+            if (disclaimer) {
+                disclaimer.classList.remove('hidden');
+                disclaimer.classList.add('flex');
+                document.body.classList.add('overflow-hidden');
+            } else {
+                // Fallback if disclaimer element is missing for some reason
+                openReportModal(window.pendingReportData);
+            }
+            
+            map.closePopup();
+        };
+
+        window.viewAllOnRoad = function(roadName) {
+            // Set search query and update UI
+            searchInput.value = roadName;
+            searchQuery = roadName;
+            updateUI();
+            
+            // Close modal
+            reportModal.classList.add('hidden');
+            document.body.classList.remove('overflow-hidden');
+            
+            // Ensure sidebar is visible
+            const isMobile = window.innerWidth < 768;
+            if (isMobile) {
+                isListView = true;
+                sidebar.classList.remove('translate-y-full');
+                sidebar.classList.add('translate-y-0');
+                if (navToggleIcon) navToggleIcon.setAttribute('data-lucide', 'map');
+                if (navToggleText) navToggleText.textContent = 'Map';
+                lucide.createIcons();
+            } else {
+                if (sidebar.classList.contains('md:-ml-96')) {
+                    toggleSidebar();
+                }
+            }
+            lucide.createIcons();
+        };
+
+        reportIssueBtn.addEventListener('click', () => {
+            window.pendingReportData = null; // Ensure fresh report
+            reportDisclaimerModal.classList.remove('hidden');
+            reportDisclaimerModal.classList.add('flex');
+            document.body.classList.add('overflow-hidden');
+        });
+
+        closeDisclaimerModal.addEventListener('click', () => {
+            reportDisclaimerModal.classList.add('hidden');
+            reportDisclaimerModal.classList.remove('flex');
+            document.body.classList.remove('overflow-hidden');
+        });
+
+        proceedToReportBtn.addEventListener('click', () => {
+            reportDisclaimerModal.classList.add('hidden');
+            reportDisclaimerModal.classList.remove('flex');
+            
+            const data = window.pendingReportData || null;
+            window.pendingReportData = null; // Clear it
+            openReportModal(data);
+        });
+
+        // Legend Toggle Logic
+        const toggleLegend = document.getElementById('toggleLegend');
+        const legendContent = document.getElementById('legendContent');
+        const legendChevron = document.getElementById('legendChevron');
+
+        if (toggleLegend && legendContent) {
+            toggleLegend.addEventListener('click', () => {
+                const isHidden = legendContent.classList.contains('hidden');
+                if (isHidden) {
+                    legendContent.classList.remove('hidden');
+                    if (legendChevron) legendChevron.style.transform = 'rotate(180deg)';
+                } else {
+                    legendContent.classList.add('hidden');
+                    if (legendChevron) legendChevron.style.transform = 'rotate(0deg)';
+                }
+            });
+        }
+
+        const locationSuggestions = document.getElementById('locationSuggestions');
+        let locationTimeout;
+
+        reportLocation.addEventListener('input', (e) => {
+            if (e.isTrusted) {
+                reportLocation.dataset.valid = 'false';
+            }
+            const val = e.target.value.toLowerCase().trim();
+            
+            if (val.length < 3) {
+                existingReportsWarning.classList.add('hidden');
+                if (locationSuggestions) locationSuggestions.classList.add('hidden');
+                return;
+            }
+            
+            const matches = allFeatures.filter(f => {
+                const rName = f.processed.roadName.toLowerCase();
+                return rName.includes(val) || (rName.length >= 3 && val.includes(rName));
+            });
+            if (matches.length > 0) {
+                existingReportsWarning.classList.remove('hidden');
+                
+                let listHtml = matches.slice(0, 3).map(m => {
+                    const desc = m.processed.desc;
+                    const shortDesc = desc.length > 50 ? desc.substring(0, 50) + '...' : desc;
+                    const status = m.processed.status;
+                    const statusColor = m.processed.severity === 'success' ? 'text-emerald-700 bg-emerald-100' : (m.processed.severity === 'critical' ? 'text-red-700 bg-red-100' : 'text-amber-700 bg-amber-100');
+                    return `<li class="mb-2 leading-tight">
+                        <strong>${m.processed.roadName}</strong> 
+                        <span class="text-[10px] uppercase px-1.5 py-0.5 rounded font-bold ml-1 ${statusColor}">${status}</span>
+                        <br><span class="text-xs opacity-90">${shortDesc}</span>
+                    </li>`;
+                }).join('');
+                
+                if (matches.length > 3) {
+                    listHtml += `<li>...and ${matches.length - 3} more</li>`;
+                }
+
+                existingReportsWarning.innerHTML = `
+                    <div class="bg-amber-50 border border-amber-200 rounded-md p-3 text-sm text-amber-800 flex items-start gap-2 cursor-pointer hover:bg-amber-100 transition-colors" onclick="window.viewAllOnRoad('${val.replace(/'/g, "\\'")}')">
+                        <i aria-hidden="true" data-lucide="alert-circle" class="w-4 h-4 mt-0.5 shrink-0 text-amber-600"></i>
+                        <div class="flex-1">
+                            <div class="flex justify-between items-center mb-1">
+                                <span class="font-bold">Existing issues found on this road:</span>
+                                <span class="text-[10px] bg-amber-200 px-1.5 py-0.5 rounded font-bold uppercase tracking-wider">View All</span>
+                            </div>
+                            <ul class="list-disc pl-4 space-y-1">
+                                ${listHtml}
+                            </ul>
+                            <p class="mt-2 text-xs opacity-80 flex items-center gap-1">
+                                Click here to see all ${matches.length} issues on the map and list.
+                                <i aria-hidden="true" data-lucide="external-link" class="w-3 h-3"></i>
+                            </p>
+                        </div>
+                    </div>
+                `;
+                lucide.createIcons();
+            } else {
+                existingReportsWarning.classList.add('hidden');
+            }
+
+            // Autocomplete logic
+            if (locationSuggestions) {
+                clearTimeout(locationTimeout);
+                locationTimeout = setTimeout(async () => {
+                    try {
+                        const response = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(val)}&format=json&addressdetails=1&countrycodes=nz&limit=5`);
+                        const data = await response.json();
+                        
+                        if (data.length > 0) {
+                            locationSuggestions.innerHTML = '';
+                            data.forEach(item => {
+                                const div = document.createElement('div');
+                                div.className = 'px-3 py-2 hover:bg-slate-100 cursor-pointer text-sm border-b border-slate-100 last:border-0';
+                                div.textContent = item.display_name;
+                                div.addEventListener('click', () => {
+                                    reportLocation.value = item.display_name;
+                                    reportLocation.dataset.valid = 'true';
+                                    reportLocation.dataset.source = 'manual';
+                                    document.getElementById('reportLat').value = item.lat;
+                                    document.getElementById('reportLng').value = item.lon;
+                                    coordsDisplay.textContent = `${parseFloat(item.lat).toFixed(5)}, ${parseFloat(item.lon).toFixed(5)}`;
+                                    selectedCoords.classList.remove('hidden');
+                                    locationSuggestions.classList.add('hidden');
+                                    // Trigger input event to update existing reports warning
+                                    reportLocation.dispatchEvent(new Event('input'));
+                                });
+                                locationSuggestions.appendChild(div);
+                            });
+                            locationSuggestions.classList.remove('hidden');
+                        } else {
+                            locationSuggestions.classList.add('hidden');
+                        }
+                    } catch (err) {
+                        console.error('Error fetching locations:', err);
+                    }
+                }, 500);
+            }
+        });
+
+        // Hide suggestions when clicking outside
+        document.addEventListener('click', (e) => {
+            if (locationSuggestions && !reportLocation.contains(e.target) && !locationSuggestions.contains(e.target)) {
+                locationSuggestions.classList.add('hidden');
+            }
+        });
+
+        function hideReportModal() {
+            reportModal.classList.add('hidden');
+            reportModal.classList.remove('flex');
+        }
+
+        closeReportModal.addEventListener('click', hideReportModal);
+
+        // Map Pin Mode Logic
+        dropPinBtn.addEventListener('click', () => {
+            hideReportModal();
+            isPinMode = true;
+            pinModeBanner.classList.remove('hidden');
+            pinModeBanner.classList.add('flex');
+            document.getElementById('map').style.cursor = 'crosshair';
+            
+            // Hide mobile UI elements during pin drop
+            const mobileNav = document.querySelector('nav.fixed.bottom-0');
+            if (mobileNav) mobileNav.classList.add('hidden');
+            if (fabReportBtn) fabReportBtn.classList.add('hidden');
+        });
+
+        useLocationBtn.addEventListener('click', () => {
+            if (navigator.geolocation) {
+                const originalText = useLocationBtn.innerHTML;
+                useLocationBtn.disabled = true;
+                useLocationBtn.innerHTML = '<i aria-hidden="true" data-lucide="loader-2" class="w-4 h-4 animate-spin"></i> <span class="hidden sm:inline">Locating...</span>';
+                lucide.createIcons();
+
+                navigator.geolocation.getCurrentPosition(
+                    async (position) => {
+                        const lat = position.coords.latitude.toFixed(5);
+                        const lng = position.coords.longitude.toFixed(5);
+                        
+                        if (reportMarker) map.removeLayer(reportMarker);
+                        reportMarker = L.marker([lat, lng]).addTo(map);
+                        map.setView([lat, lng], 16);
+                        
+                        coordsDisplay.textContent = `${lat}, ${lng}`;
+                        document.getElementById('reportLat').value = lat;
+                        document.getElementById('reportLng').value = lng;
+                        selectedCoords.classList.remove('hidden');
+                        
+                        // Reverse geocode
+                        try {
+                            const response = await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json`);
+                            const data = await response.json();
+                            if (data && data.display_name) {
+                                reportLocation.value = data.display_name;
+                            } else {
+                                reportLocation.value = `${lat}, ${lng}`;
+                            }
+                            reportLocation.dataset.valid = 'true';
+                            reportLocation.dataset.source = 'gps';
+                        } catch (err) {
+                            console.error('Reverse geocoding failed:', err);
+                            reportLocation.value = `${lat}, ${lng}`;
+                            reportLocation.dataset.valid = 'true';
+                            reportLocation.dataset.source = 'gps';
+                        }
+                        
+                        useLocationBtn.disabled = false;
+                        useLocationBtn.innerHTML = originalText;
+                        lucide.createIcons();
+                        
+                        // Trigger input event to check for existing reports nearby
+                        reportLocation.dispatchEvent(new Event('input'));
+                    },
+                    (error) => {
+                        console.error('Geolocation error:', error);
+                        alert('Unable to retrieve your location. Please ensure location services are enabled.');
+                        useLocationBtn.disabled = false;
+                        useLocationBtn.innerHTML = originalText;
+                        lucide.createIcons();
+                    },
+                    { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+                );
+            } else {
+                alert('Geolocation is not supported by your browser.');
+            }
+        });
+
+        function exitPinMode() {
+            isPinMode = false;
+            pinModeBanner.classList.add('hidden');
+            pinModeBanner.classList.remove('flex');
+            document.getElementById('map').style.cursor = '';
+            
+            // Restore mobile UI elements
+            const mobileNav = document.querySelector('nav.fixed.bottom-0');
+            if (mobileNav) mobileNav.classList.remove('hidden');
+            if (fabReportBtn) fabReportBtn.classList.remove('hidden');
+        }
+
+        cancelPinMode.addEventListener('click', () => {
+            exitPinMode();
+            reportModal.classList.remove('hidden');
+            reportModal.classList.add('flex');
+        });
+        closeSuccessBtn.addEventListener('click', hideReportModal);
+
+        reportModal.addEventListener('click', (e) => {
+            if (e.target === reportModal) hideReportModal();
+        });
+
+        // Status Button Logic
+        document.querySelectorAll('.status-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.querySelectorAll('.status-btn').forEach(b => {
+                    b.classList.remove('bg-slate-100', 'border-slate-800', 'text-slate-900', 'ring-2', 'ring-slate-800/10');
+                    b.classList.add('border-slate-200', 'text-slate-500');
+                });
+                btn.classList.remove('border-slate-200', 'text-slate-500');
+                btn.classList.add('bg-slate-100', 'border-slate-800', 'text-slate-900', 'ring-2', 'ring-slate-800/10');
+                document.getElementById('reportStatus').value = btn.dataset.status;
+            });
+        });
+        
+        const triggerReportSubmitBtn = document.getElementById('triggerReportSubmitBtn');
+        if(triggerReportSubmitBtn) {
+            triggerReportSubmitBtn.addEventListener('click', () => {
+                // Manually trigger the form submit event
+                reportForm.dispatchEvent(new Event('submit', { cancelable: true }));
+            });
+        }
+
+        reportForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            // Reset errors
+            document.querySelectorAll('[id^="error-"]').forEach(el => el.classList.add('hidden'));
+            document.querySelectorAll('.border-red-500').forEach(el => el.classList.remove('border-red-500'));
+            document.getElementById('statusButtonsContainer').classList.remove('bg-red-50', 'ring-1', 'ring-red-200');
+
+            let hasError = false;
+
+            if (reportLocation.dataset.source !== 'gps') {
+                // If the user typed an address or used autocomplete, we require a digit in the first segment.
+                // This prevents postal codes (like "0112" later in the string) from falsely passing the validation 
+                // for addresses like "Whau Valley, Whangārei, 0112".
+                const locationFirstSegment = reportLocation.value.split(',')[0];
+                
+                if (!/\d/.test(locationFirstSegment)) {
+                    // Manually entered addresses without any digits in the core road name are forbidden
+                    document.getElementById('error-location-digits').classList.remove('hidden');
+                    reportLocation.classList.add('border-red-500');
+                    hasError = true;
+                } else {
+                    // Valid manual input with numbers in the main segment
+                    reportLocation.dataset.valid = 'true';
+                }
+            }
+            
+            if (reportLocation.dataset.valid !== 'true' && !hasError) {
+                document.getElementById('error-location').classList.remove('hidden');
+                reportLocation.classList.add('border-red-500');
+                hasError = true;
+            }
+
+            const type = document.getElementById('reportType').value;
+            if (!type) {
+                document.getElementById('error-type').classList.remove('hidden');
+                document.getElementById('reportType').classList.add('border-red-500'); document.getElementById('reportType').setAttribute('aria-invalid', 'true');
+                hasError = true;
+            }
+
+            const status = document.getElementById('reportStatus').value;
+            if (!status) {
+                document.getElementById('error-status').classList.remove('hidden');
+                document.getElementById('statusButtonsContainer').classList.add('bg-red-50', 'ring-1', 'ring-red-200');
+                hasError = true;
+            }
+
+            const desc = document.getElementById('reportDesc').value;
+            const updatePrefix = "Update for existing issue:";
+            
+            if (type === 'update') {
+                const cleanDesc = desc.replace(updatePrefix, "").trim();
+                if (cleanDesc.length < 5) {
+                    document.getElementById('error-desc').textContent = 'Please provide additional information for this update.';
+                    document.getElementById('error-desc').classList.remove('hidden');
+                    document.getElementById('reportDesc').classList.add('border-red-500'); document.getElementById('reportDesc').setAttribute('aria-invalid', 'true');
+                    hasError = true;
+                }
+            } else if (desc.trim().length < 5) {
+                document.getElementById('error-desc').textContent = 'Please provide a description of the issue.';
+                document.getElementById('error-desc').classList.remove('hidden');
+                document.getElementById('reportDesc').classList.add('border-red-500');
+                hasError = true;
+            }
+
+            const mediaFile = document.getElementById('reportMedia').files[0];
+            if (mediaFile) {
+                // Check file size (40MB limit)
+                if (mediaFile.size > 40 * 1024 * 1024) {
+                    alert('The selected file is too large. Please choose a file smaller than 40MB.');
+                    return;
+                }
+            }
+
+            if (hasError) {
+                // Scroll to the first error
+                const firstError = document.querySelector('.border-red-500, .bg-red-50');
+                if (firstError) firstError.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                return;
+            }
+
+            const submitText = document.getElementById('reportSubmitText');
+            const submitSpinner = document.getElementById('reportSubmitSpinner');
+            
+            if (triggerReportSubmitBtn) triggerReportSubmitBtn.disabled = true;
+            if (submitText) submitText.classList.add('hidden');
+            if (submitSpinner) submitSpinner.classList.remove('hidden');
+
+            try {
+                const formData = new FormData();
+                formData.append('location', document.getElementById('reportLocation').value);
+                formData.append('type', document.getElementById('reportType').value);
+                formData.append('status', document.getElementById('reportStatus').value);
+                formData.append('description', document.getElementById('reportDesc').value);
+                formData.append('system_id', document.getElementById('reportSystemId').value);
+                formData.append('lat', document.getElementById('reportLat').value);
+                formData.append('lng', document.getElementById('reportLng').value);
+                
+                if (mediaFile) {
+                    formData.append('media', mediaFile);
+                }
+
+                const response = await fetch('/api/report', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                let result;
+                const contentType = response.headers.get('content-type');
+                if (contentType && contentType.includes('application/json')) {
+                    result = await response.json();
+                } else {
+                    const text = await response.text();
+                    console.error('Non-JSON response:', text);
+                    
+                    if (text.includes('Cookie check') || text.includes('Authenticate in new window')) {
+                        throw new Error('Your browser is blocking a required security cookie. Please open the application in a new window (using the "Open in new tab" button at the top right) to submit your report.');
+                    }
+                    
+                    throw new Error(response.ok ? 'Received unexpected response from server.' : 'Server error. Please try again later.');
+                }
+
+                if (!response.ok || !result.success) {
+                    throw new Error(result.error || 'Failed to submit report');
+                }
+
+                reportForm.classList.add('hidden');
+                document.getElementById('reportFormActions').classList.add('hidden');
+                reportSuccess.classList.remove('hidden');
+            } catch (error) {
+                console.error('Submission error:', error);
+                alert(`There was an error submitting your report:\n${error.message}\n\nPlease try again.`);
+            } finally {
+                if (triggerReportSubmitBtn) triggerReportSubmitBtn.disabled = false;
+                if (submitText) submitText.classList.remove('hidden');
+                if (submitSpinner) submitSpinner.classList.add('hidden');
+            }
+        });
+
+        // Main Init
+        async function init() {
+            initMap();
+
+            // Map click for dropping pin
+            map.on('click', (e) => {
+                handlePinDrop(e.latlng);
+            });
+
+            showLoading("Connecting to Backend...");
+            try {
+                const healthCheck = await fetch('/api/health');
+                const contentType = healthCheck.headers.get('content-type');
+                if (!healthCheck.ok || !contentType || !contentType.includes('application/json')) {
+                    const text = await healthCheck.text();
+                    if (text.includes('Cookie check')) {
+                        throw new Error('Platform authentication required. Please refresh the page or click "Authenticate in new window" if prompted.');
+                    }
+                    throw new Error('Backend API is not responding correctly.');
+                }
+            } catch (error) {
+                console.error('Backend health check failed:', error);
+                loadingText.textContent = error.message;
+                loadingText.classList.add('text-red-400');
+                const loadingIcon = loadingOverlay.querySelector('i, svg');
+                if (loadingIcon) {
+                    loadingIcon.classList.replace('animate-spin', 'text-red-500');
+                    loadingIcon.setAttribute('data-lucide', 'alert-circle');
+                }
+                lucide.createIcons();
+                // We don't return here, we try to load the map data anyway since it's external
+            }
+
+            showLoading("Fetching Road Network Data...");
+            try {
+                await refreshData();
+            } catch (error) {
+                console.error(error);
+                loadingText.textContent = "Failed to load data. Please refresh.";
+                loadingText.classList.add('text-red-400');
+                const loadingIcon = loadingOverlay.querySelector('i, svg');
+                if (loadingIcon) {
+                    loadingIcon.classList.replace('animate-spin', 'text-red-500');
+                    loadingIcon.setAttribute('data-lucide', 'x-circle');
+                }
+                lucide.createIcons();
+                return; // Don't hide loading
+            }
+            hideLoading();
+        }
+
+        // Start
+        init();
+
+    </script>
+</body>
+</html>

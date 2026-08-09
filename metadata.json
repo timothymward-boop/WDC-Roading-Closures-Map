@@ -1,0 +1,5 @@
+{
+  "name": "Unplanned Closures Map",
+  "description": "",
+  "requestFramePermissions": ["geolocation"]
+}
